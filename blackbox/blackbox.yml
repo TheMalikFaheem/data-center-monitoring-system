@@ -1,0 +1,79 @@
+# Blackbox exporter — the "check it from the outside" prober.
+# A "module" is one kind of check. You reference these by name
+# from prometheus.yml.
+
+modules:
+
+  # Standard website check. Follows redirects, accepts any 2xx.
+  # Also returns SSL certificate expiry automatically for https:// URLs.
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: [HTTP/1.1, HTTP/2.0]
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+      fail_if_ssl: false
+      fail_if_not_ssl: false
+
+  # Stricter check: confirms the page actually rendered your content,
+  # not a friendly "we'll be right back" error page that returns 200.
+  # Copy this, change the regexp, and point a target at it.
+  http_2xx_content:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: [HTTP/1.1, HTTP/2.0]
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+      fail_if_body_not_matches_regexp:
+        - "(?i)</html>"
+
+  # For API health endpoints that must return 200 and valid JSON.
+  http_api:
+    prober: http
+    timeout: 10s
+    http:
+      valid_status_codes: [200]
+      method: GET
+      preferred_ip_protocol: ip4
+      fail_if_body_not_matches_regexp:
+        - "(?i)(ok|healthy|\"status\")"
+
+  # Ping. Used for switches, cameras, iDRAC, gateways.
+  icmp:
+    prober: icmp
+    timeout: 5s
+    icmp:
+      preferred_ip_protocol: ip4
+
+  # "Is this port open?" — good for database ports, SSH, RDP.
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: ip4
+
+  # Mail server TLS. Mail certificates expire too, and almost
+  # nobody monitors them until delivery breaks.
+  smtp_starttls:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip4
+      query_response:
+        - expect: "^220"
+        - send: "EHLO prober"
+        - expect: "^250-STARTTLS"
+        - send: "STARTTLS"
+        - expect: "^220"
+        - starttls: true
+
+  # Checks that your own DNS zones still resolve.
+  dns_check:
+    prober: dns
+    timeout: 5s
+    dns:
+      query_name: "example.com"
+      query_type: "A"
+      valid_rcodes: [NOERROR]

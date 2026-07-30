@@ -1,0 +1,24 @@
+# Automatically connects Grafana to Prometheus on first start,
+# so you don't have to configure a data source by hand.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 30s
+      httpMethod: POST
+    editable: false
+
+  - name: Alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false
+    editable: false

@@ -1,0 +1,84 @@
+# Prometheus configuration.
+#
+# You normally do NOT need to edit this file to add things to monitor.
+# Instead edit the simple lists in the targets/ folder:
+#   targets/websites.yml  -> websites to check
+#   targets/servers.yml   -> servers to measure
+
+global:
+  scrape_interval: 30s          # how often to collect measurements
+  evaluation_interval: 30s      # how often to check alert rules
+  external_labels:
+    monitor: datacenter
+
+# Where to send alerts once a rule fires
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+# Alert rule files
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+
+  # Prometheus measures itself
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # ---------------------------------------------------------------
+  # Servers running node_exporter.
+  # Add machines by editing targets/servers.yml
+  # ---------------------------------------------------------------
+  - job_name: node
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/servers.yml
+        refresh_interval: 60s
+
+  # ---------------------------------------------------------------
+  # Website / HTTPS checks via the blackbox exporter.
+  # Add sites by editing targets/websites.yml
+  #
+  # The relabel rules below take each URL from that file, hand it to
+  # the blackbox exporter as a parameter, and label the result with
+  # the URL so dashboards read nicely. This indirection is normal
+  # Prometheus practice for probe-style checks.
+  # ---------------------------------------------------------------
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/websites.yml
+        refresh_interval: 60s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # ---------------------------------------------------------------
+  # Ping checks. Useful for switches, cameras, iDRAC, gateways —
+  # anything that answers ping but has no exporter yet.
+  # ---------------------------------------------------------------
+  - job_name: blackbox-icmp
+    metrics_path: /probe
+    params:
+      module: [icmp]
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/ping.yml
+        refresh_interval: 60s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115

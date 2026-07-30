@@ -2,6 +2,10 @@
 
 Local, fully self-hosted, single-pane-of-glass monitoring for a small data center.
 
+> **New to monitoring? Start with [GETTING-STARTED.md](GETTING-STARTED.md).**
+> It walks you from an empty VM to working phone alerts in about 90 minutes, assuming no prior knowledge of Prometheus, Grafana, or Docker. Come back here for the reasoning.
+
+- **[GETTING-STARTED.md](GETTING-STARTED.md)** — step-by-step setup guide, copy-paste commands, no assumed knowledge.
 - **[COVERAGE.md](COVERAGE.md)** — exhaustive per-device breakdown: what to monitor, which exporter, which metrics, which alerts.
 - This file — architecture, tool decisions, sizing, ports, phased rollout.
 
@@ -162,18 +166,35 @@ Ranked by "how badly this bites you at 3 a.m." — details in [COVERAGE.md § 10
 
 ---
 
-## 9. Next step
+## 9. Repo layout
 
-Say the word and I'll scaffold the working stack in this repo:
+**Phase 0 is scaffolded and runnable.** Follow [GETTING-STARTED.md](GETTING-STARTED.md).
 
 ```
-docker-compose.yml          # full stack, pinned versions
-prometheus/                 # prometheus.yml, targets/, rules/
-alertmanager/               # routing, inhibition, ntfy + Telegram receivers
-loki/ · alloy/              # log pipeline + syslog + trap receivers
-blackbox/ · snmp/           # probe modules, generated SNMP MIB config
-grafana/provisioning/       # datasources + dashboards as code
-exporters/hikvision/        # custom ISAPI exporter for the NVR
-exporters/whm/              # custom WHM/cPanel exporter
-ansible/                    # node_exporter + Alloy rollout to hosts and VMs
+docker-compose.yml                  ✅ Prometheus, Grafana, Alertmanager,
+                                       Blackbox, node_exporter, Uptime Kuma
+.env.example                        ✅ copy to .env — Grafana password, timezone
+prometheus/prometheus.yml           ✅ scrape config
+prometheus/targets/websites.yml     ✅ edit this to add sites
+prometheus/targets/servers.yml      ✅ edit this to add servers
+prometheus/targets/ping.yml         ✅ edit this to add switches/NVR/iDRAC
+prometheus/rules/alerts.yml         ✅ 17 starter alerts incl. Watchdog
+alertmanager/alertmanager.yml       ✅ grouping, inhibition, Telegram ready
+blackbox/blackbox.yml               ✅ http, icmp, tcp, smtp_starttls, dns
+grafana/provisioning/               ✅ datasources auto-connected
 ```
+
+Still to build, in rollout order:
+
+```
+ansible/                            ⬜ node_exporter + Alloy rollout (Phase 1)
+snmp/                               ⬜ generated MIB config for pfSense/switches (Phase 2)
+exporters/hikvision/                ⬜ custom ISAPI exporter for the NVR (Phase 2)
+loki/ · alloy/                      ⬜ log pipeline, syslog + trap receivers (Phase 3)
+exporters/whm/                      ⬜ custom WHM/cPanel exporter (Phase 4)
+nut/                                ⬜ UPS monitoring + graceful shutdown (Phase 5)
+```
+
+### Starter alert rules included
+
+Websites: down, slow, SSL <21 d, SSL <7 d · Reachability: device unreachable, internet packet loss · Servers: exporter down, disk 85%/95%, inodes, memory, CPU, **CPU steal**, reboot detection, clock drift, `predict_linear` disk-fill forecast · Plus the **Watchdog** deadman's-switch alert.
