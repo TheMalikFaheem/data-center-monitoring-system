@@ -1,0 +1,23 @@
+# environment.yml — tracked defaults shared by every deployment.
+#
+# CONTRACT: flat `key: "value"` lines ONLY (parsed by scripts/common.sh:yaml_get).
+#
+# Per-server values go in environment.local.yml — same format, same directory,
+# gitignored. Any key there overrides the value here. NEVER put server-specific
+# values in this file; it must stay valid for a fresh Ubuntu 24.04 box.
+
+# Where each service listens. 127.0.0.1 = loopback only: nothing is reachable
+# from the network until the nginx reverse proxy phase. On a future on-prem
+# host, override node_exporter_listen in environment.local.yml with a LAN bind.
+prometheus_listen: "127.0.0.1:9090"
+node_exporter_listen: "127.0.0.1:9100"
+
+# How long Prometheus keeps metric history on disk.
+prometheus_retention: "30d"
+
+# How often Prometheus pulls metrics from every target.
+scrape_interval: "15s"
+
+# Attached to every metric as an external label (useful once several
+# environments feed one Grafana).
+external_label_env: "production"

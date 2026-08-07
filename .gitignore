@@ -1,2 +1,13 @@
-.claude/
+# macOS noise
 .DS_Store
+
+# Server-specific overrides — never committed (see configs/environment.yml header)
+configs/environment.local.yml
+
+# Runtime state created on the server by the installers
+.downloads/
+.rollback/
+
+# Backup files created when the framework replaces an existing file
+*.bak
+*.bak.*

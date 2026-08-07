@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+#
+# monitorctl — management CLI for the monitoring platform.
+#
+# A thin dispatcher: all real logic lives in scripts/. Valid components are
+# discovered from scripts/install-*.sh, so adding install-loki.sh makes
+# `monitorctl install loki` work with no change here.
+
+set -Eeuo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/common.sh"
+
+# Dependency order for `install all` — grows as installers are added.
+INSTALL_ORDER=(node_exporter prometheus)
+
+discover_components() {
+    local f n
+    for f in "$REPO_DIR"/scripts/install-*.sh; do
+        [[ -e "$f" ]] || continue
+        n=$(basename "$f")
+        n=${n#install-}
+        n=${n%.sh}
+        printf '%s\n' "${n//-/_}"
+    done
+}
+
+script_for() {
+    printf '%s\n' "$REPO_DIR/scripts/install-${1//_/-}.sh"
+}
+
+usage() {
+    cat <<EOF
+monitorctl — manage the monitoring platform
+
+Usage:
+  monitorctl install <component>|all    Install or upgrade one component (or all, in order)
+  monitorctl status [component]         systemd state (compact table without an argument)
+  monitorctl health [component]         Health checks: active + HTTP + version vs pin
+  monitorctl versions                   Pinned vs installed versions, drift marked
+  monitorctl update                     Re-run installers where installed != pinned
+
+Components:
+$(discover_components | sed 's/^/  /')
+EOF
+}
+
+cmd=${1:-}
+if [[ $# -gt 0 ]]; then shift; fi
+
+case "$cmd" in
+    install)
+        comp=${1:-}
+        if [[ -z "$comp" ]]; then
+            usage
+            exit 1
+        fi
+        if [[ "$comp" == "all" ]]; then
+            failed=()
+            for c in "${INSTALL_ORDER[@]}"; do
+                log info "--- monitorctl: installing $c ---"
+                if ! bash "$(script_for "$c")"; then
+                    log warn "$c failed (it rolled itself back) — continuing"
+                    failed+=("$c")
+                fi
+            done
+            if (( ${#failed[@]} > 0 )); then
+                die "failed components: ${failed[*]}"
+            fi
+            log info "all components installed"
+        else
+            if ! discover_components | grep -qx "$comp"; then
+                log error "unknown component '$comp' — valid: $(discover_components | tr '\n' ' ')"
+                exit 1
+            fi
+            exec bash "$(script_for "$comp")" "$@"
+        fi
+        ;;
+
+    status)
+        if [[ -n "${1:-}" ]]; then
+            exec systemctl status --no-pager "$1"
+        fi
+        printf '%-20s %-10s %s\n' "COMPONENT" "ACTIVE" "ENABLED"
+        for c in $(discover_components); do
+            [[ -f "/etc/systemd/system/$c.service" ]] || continue
+            printf '%-20s %-10s %s\n' "$c" \
+                "$(systemctl is-active "$c" 2>/dev/null || true)" \
+                "$(systemctl is-enabled "$c" 2>/dev/null || true)"
+        done
+        ;;
+
+    health)
+        exec "$REPO_DIR/scripts/healthcheck.sh" "$@"
+        ;;
+
+    versions)
+        printf '%-20s %-12s %-12s %s\n' "COMPONENT" "PINNED" "INSTALLED" "STATE"
+        for c in $(discover_components); do
+            pinned=$(yaml_get "$CONFIG_DIR/versions.yml" "$c") || pinned="-"
+            inst=$(installed_version "$c")
+            inst=${inst:--}
+            state="ok"
+            if [[ "$inst" == "-" ]]; then
+                state="not installed"
+            elif [[ "$inst" != "$pinned" ]]; then
+                state="DRIFT — run: monitorctl update"
+            fi
+            printf '%-20s %-12s %-12s %s\n' "$c" "$pinned" "$inst" "$state"
+        done
+        ;;
+
+    update)
+        updated=0
+        for c in $(discover_components); do
+            inst=$(installed_version "$c")
+            if [[ -z "$inst" ]]; then continue; fi
+            pinned=$(yaml_get "$CONFIG_DIR/versions.yml" "$c") || continue
+            if [[ "$inst" != "$pinned" ]]; then
+                log info "--- monitorctl: updating $c $inst → $pinned ---"
+                bash "$(script_for "$c")"
+                updated=1
+            fi
+        done
+        if [[ $updated -eq 0 ]]; then
+            log info "everything already matches configs/versions.yml"
+        fi
+        ;;
+
+    ""|help|-h|--help)
+        usage
+        ;;
+
+    *)
+        log error "unknown command '$cmd'"
+        usage
+        exit 1
+        ;;
+esac

@@ -1,16 +1,39 @@
-# Data Center Monitoring System
+# data-center-monitoring-system
 
-Centralized infrastructure monitoring & observability platform for a small on-premises data center, built on **Grafana, Prometheus, Loki, and Alertmanager**, deployed with Docker Compose on a DigitalOcean server (`monitor01`, Ubuntu 24.04 LTS).
+Installer framework for a centralized monitoring platform (Prometheus,
+Grafana, Loki, Alertmanager + exporters) as **native systemd services** on
+Ubuntu 24.04 — no Docker. Clone it onto a fresh server, run one command per
+component, and every install is version-pinned, checksum-verified,
+health-checked, and rolls itself back on failure.
 
-On-prem infrastructure (Proxmox, pfSense, Cisco/HP switches, Dell iDRAC, databases, applications, websites) will connect to the central platform over a WireGuard VPN.
+```bash
+git clone https://github.com/TheMalikFaheem/data-center-monitoring-system.git /opt/monitoring
+cd /opt/monitoring
+sudo ./monitorctl install node_exporter
+sudo ./monitorctl install prometheus
+./monitorctl health
+```
 
-## Documentation
+## Layout
 
-| Document | What it covers |
+| Path | Purpose |
 |---|---|
-| [MONITORING-PROJECT-GUIDE.md](MONITORING-PROJECT-GUIDE.md) | Complete from-zero guide: core concepts (metrics vs logs, exporters, scraping), every component explained, architecture, directory structure, operations cheat sheet, warnings, glossary |
-| [PROJECT-JOURNAL.md](PROJECT-JOURNAL.md) | Running project log: decisions (hybrid cloud architecture, SRS/TRD), completed phases, incident log, status board, roadmap, team-lead summary |
+| `monitorctl` | Operator CLI: `install` · `status` · `health` · `versions` · `update` |
+| `configs/versions.yml` | Every component version, pinned in one place |
+| `configs/environment.yml` | Tracked defaults; `environment.local.yml` (gitignored) overrides per server |
+| `scripts/common.sh` | Shared library: preflight, download + SHA256 verify, templating, rollback, health gate |
+| `scripts/install-*.sh` | One installer per component, all the same 9-step skeleton |
+| `templates/` · `services/` | Config and systemd unit templates (`{{TOKEN}}` substitution) |
+| `docs/runbook.md` | **Start here to operate it** — includes a monitoring primer |
+| `Project.md` | Project state, architecture, roadmap, decision log |
 
-## Current Status
+## Principles
 
-Core platform deployed and running (~20–25% of project): Grafana, Prometheus, Loki, Alertmanager, Blackbox Exporter, and SNMP Exporter are up in Docker on `monitor01`. No infrastructure targets onboarded yet — next milestones are the Nginx reverse proxy + HTTPS, the WireGuard tunnel, and monitoring the monitoring server itself with node_exporter.
+- Versions live only in `versions.yml`; `monitorctl update` reconciles drift.
+- Existing configs are never overwritten; data is never deleted, not even by rollback.
+- Everything binds `127.0.0.1` until the nginx+HTTPS phase exposes it deliberately.
+- Failed installs roll back to a clean system and log every undo step to
+  `/var/log/monitoring/install.log`.
+
+Upgrading = change one version in `versions.yml`, push, `git pull --ff-only`
+on the server, `sudo ./monitorctl update`.

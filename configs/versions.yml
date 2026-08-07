@@ -1,0 +1,21 @@
+# versions.yml — the single source of truth for component versions.
+#
+# CONTRACT: flat `component: "version"` lines ONLY. This file is parsed by
+# scripts/common.sh:yaml_get, not a full YAML parser. No nesting, no lists,
+# no "v" prefixes.
+#
+# To upgrade a component: change its version here, commit, push, then on the
+# server: git pull --ff-only && sudo ./monitorctl update
+
+prometheus: "3.6.0"
+alertmanager: "0.28.1"
+grafana: "12.2.0"
+loki: "3.5.5"
+alloy: "1.11.1"
+node_exporter: "1.9.1"
+process_exporter: "0.8.7"
+blackbox_exporter: "0.27.0"
+snmp_exporter: "0.29.0"
+mysqld_exporter: "0.17.2"
+postgres_exporter: "0.18.0"
+redis_exporter: "1.80.0"
