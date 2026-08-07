@@ -77,6 +77,12 @@ log() {
 # die <message...> — log an error, run any pending rollback, and exit.
 die() {
     log error "$@"
+    # Inside a command substitution we are in a subshell: the parent's
+    # rollback stack is not ours to run (running our copy would double-execute
+    # it). Just exit; the parent's ERR trap does the one authoritative rollback.
+    if (( BASH_SUBSHELL > 0 )); then
+        exit 1
+    fi
     run_rollback
     exit 1
 }
@@ -170,6 +176,11 @@ require_commands() {
         return 0
     fi
     log warn "missing commands: ${missing[*]} — installing via apt"
+    # Lists on fresh cloud images can be weeks stale; superseded .debs 404.
+    # Best-effort refresh (warn, don't die): the install below is the real gate.
+    DEBIAN_FRONTEND=noninteractive \
+        apt-get -o DPkg::Lock::Timeout=300 update \
+        || log warn "apt-get update failed — trying install with existing package lists"
     # DPkg::Lock::Timeout: fresh droplets often run unattended-upgrades at
     # boot; wait for the lock instead of failing. NEEDRESTART_MODE=a stops
     # Ubuntu 24.04's interactive "restart services?" dialog.
@@ -214,7 +225,9 @@ check_ufw() {
         log warn "ufw not installed — services bind 127.0.0.1, but install ufw as a backstop"
         return 0
     fi
-    if ! ufw status 2>/dev/null | grep -q "Status: active"; then
+    local status
+    status=$(ufw status 2>/dev/null || true)
+    if ! grep -q "Status: active" <<<"$status"; then
         log warn "ufw is inactive — enable it manually after 'ufw allow OpenSSH' (see docs/runbook.md)"
     fi
 }
@@ -287,7 +300,9 @@ render_template() {
     local content kv
     content=$(<"$src")
     for kv in "$@"; do
-        content=${content//"{{${kv%%=*}}}"/${kv#*=}}
+        # The replacement MUST be quoted: bash 5.2's patsub_replacement (on by
+        # default) would otherwise expand '&' in the value to the matched token.
+        content=${content//"{{${kv%%=*}}}"/"${kv#*=}"}
     done
     if grep -Eq '\{\{[A-Z_]+\}\}' <<<"$content"; then
         die "unrendered {{TOKEN}} left after rendering $src — missing a KEY=VALUE argument?"
@@ -347,18 +362,22 @@ fetch_and_verify() {
     printf '%s\n' "$tarball"
 }
 
-# extract_tarball <tarball> — extracts into a temp dir (cleaned up on both
-# success and rollback) and prints the single top-level directory inside.
+# extract_tarball <tarball> <out_varname> — extracts into a temp dir (cleaned
+# up on both success and rollback) and stores the single top-level directory
+# in the named variable. Call it DIRECTLY, never via $(...): a command
+# substitution runs in a subshell, where the _TMPDIRS bookkeeping (and any
+# die → rollback) would be lost.
 extract_tarball() {
     local tarball=$1 tmp topdir
+    local -n _extract_out=$2
     tmp=$(mktemp -d /tmp/monitoring-extract.XXXXXX)
     _TMPDIRS+=("$tmp")
     tar -xzf "$tarball" -C "$tmp" || die "failed to extract $(basename "$tarball")"
-    topdir=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)
+    topdir=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -print -quit)
     if [[ -z "$topdir" ]]; then
         die "unexpected layout inside $(basename "$tarball")"
     fi
-    printf '%s\n' "$topdir"
+    _extract_out=$topdir
 }
 
 # ---------------------------------------------------------------------------
@@ -437,6 +456,12 @@ install_unit() {
 enable_start_service() {
     local name=$1
     if systemctl is-enabled "$name" >/dev/null 2>&1; then
+        # The stop undo matters on upgrades: without it, a failed post-restart
+        # health gate would restore the old binary on disk while the NEW
+        # process kept running (the installers' "systemctl start" undo is a
+        # no-op on an active unit). Popping this stop first kills the new
+        # process, so the restored old binary genuinely starts afterwards.
+        push_rollback "systemctl stop $name"
         systemctl restart "$name"
     else
         push_rollback "systemctl disable --now $name"
@@ -461,15 +486,30 @@ wait_for_http() {
     return 0
 }
 
-# installed_version <binary> — prints "3.6.0" or nothing if absent. Every
-# Prometheus-ecosystem binary prints "name, version X.Y.Z (...)" as the
-# first line of --version output.
+# installed_version <binary> — prints "3.6.0", or nothing if the binary is
+# absent OR broken; ALWAYS exits 0 so set -e callers treat "broken" exactly
+# like "not installed" (an interrupted install must be repairable by a
+# re-run, not a dead end). Every Prometheus-ecosystem binary prints
+# "name, version X.Y.Z (...)" as the first line of --version output.
 installed_version() {
-    local bin=$1
-    if ! command -v "$bin" >/dev/null 2>&1; then
-        return 0
+    local bin=$1 exe out
+    # Prefer the fixed install path: cron/systemd PATH often lacks
+    # /usr/local/bin, which would misreport installed components as missing.
+    exe="$BIN_DIR/$bin"
+    if [[ ! -f "$exe" || ! -x "$exe" ]]; then
+        exe=$(command -v "$bin") || return 0
     fi
-    "$bin" --version 2>&1 | awk 'NR==1 {print $3; exit}'
+    # awk must consume ALL input (no early exit): under pipefail, an awk that
+    # quits while --version is still printing kills the pipeline with SIGPIPE.
+    # The || true isolates the binary's own exit status: a corrupt/truncated
+    # binary (exit 126) must read as "not installed", not abort the caller.
+    out=$({ "$exe" --version 2>&1 || true; } | awk 'NR==1 {v=$3} END {if (v != "") print v}')
+    # Only emit something version-shaped — bash's "cannot execute binary
+    # file" error text would otherwise be parsed as a version.
+    if [[ "$out" =~ ^[0-9]+\.[0-9]+ ]]; then
+        printf '%s\n' "$out"
+    fi
+    return 0
 }
 
 # verify_service_health <component> <expected_version>

@@ -7,7 +7,9 @@
 # `monitorctl install loki` work with no change here.
 
 set -Eeuo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/common.sh"
+# readlink -f: resolve a symlinked monitorctl (e.g. /usr/local/bin/monitorctl
+# → /opt/monitoring/monitorctl) so common.sh is found next to the real file.
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/scripts/common.sh"
 
 # Dependency order for `install all` — grows as installers are added.
 INSTALL_ORDER=(node_exporter prometheus)
@@ -54,11 +56,12 @@ case "$cmd" in
             exit 1
         fi
         if [[ "$comp" == "all" ]]; then
+            shift   # drop "all" so flags like --reinstall pass through to each installer
             failed=()
             for c in "${INSTALL_ORDER[@]}"; do
                 log info "--- monitorctl: installing $c ---"
-                if ! bash "$(script_for "$c")"; then
-                    log warn "$c failed (it rolled itself back) — continuing"
+                if ! bash "$(script_for "$c")" "$@"; then
+                    log warn "$c installer exited non-zero — continuing"
                     failed+=("$c")
                 fi
             done
@@ -67,10 +70,14 @@ case "$cmd" in
             fi
             log info "all components installed"
         else
-            if ! discover_components | grep -qx "$comp"; then
-                log error "unknown component '$comp' — valid: $(discover_components | tr '\n' ' ')"
+            # Collect the list first: `discover_components | grep -q` under
+            # pipefail dies of SIGPIPE when grep exits on an early match.
+            components=$(discover_components)
+            if ! grep -qx "$comp" <<<"$components"; then
+                log error "unknown component '$comp' — valid: ${components//$'\n'/ }"
                 exit 1
             fi
+            shift   # drop the component name so flags like --reinstall pass through as $1
             exec bash "$(script_for "$comp")" "$@"
         fi
         ;;

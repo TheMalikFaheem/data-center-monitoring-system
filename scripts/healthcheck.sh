@@ -10,7 +10,7 @@
 # at /etc/systemd/system/<component>.service.
 
 set -uo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+source "$(dirname "$(readlink -f "$0")")/common.sh"
 
 # Deliberately NOT `set -e`: failing checks are results to report, not
 # reasons to abort.
@@ -18,6 +18,10 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 COMPONENTS=(prometheus node_exporter alertmanager grafana loki alloy
             blackbox_exporter snmp_exporter process_exporter)
 if [[ -n "${1:-}" ]]; then
+    if [[ -z "${HEALTH_URL[$1]:-}" ]]; then
+        echo "unknown component '$1' — valid: ${!HEALTH_URL[*]}" >&2
+        exit 2
+    fi
     COMPONENTS=("$1")
 fi
 
@@ -56,6 +60,12 @@ for c in "${COMPONENTS[@]}"; do
 done
 
 if [[ $found -eq 0 ]]; then
+    # Asking about a specific component that isn't installed is a failure
+    # (a watchdog must not report green); an empty no-arg scan is just news.
+    if [[ -n "${1:-}" ]]; then
+        echo "'$1' is not installed — run: monitorctl install $1" >&2
+        exit 2
+    fi
     echo "no components installed yet — run: monitorctl install <component>"
 fi
 

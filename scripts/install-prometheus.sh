@@ -11,7 +11,7 @@
 # Usage: sudo ./scripts/install-prometheus.sh [--reinstall]
 
 set -Eeuo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+source "$(dirname "$(readlink -f "$0")")/common.sh"
 
 COMPONENT="prometheus"
 REINSTALL=0
@@ -40,15 +40,21 @@ ENV_LABEL=$(get_env external_label_env "production")
 
 # --- 3. Decide what to do --------------------------------------------------
 MODE="install"
-if [[ -n "$CURRENT" && $REINSTALL -eq 0 ]]; then
-    if [[ "$CURRENT" == "$TARGET" ]]; then
+if [[ -n "$CURRENT" && $REINSTALL -eq 0 && "$CURRENT" != "$TARGET" ]]; then
+    MODE="upgrade"
+    log info "upgrading $COMPONENT $CURRENT → $TARGET"
+elif [[ -n "$CURRENT" && $REINSTALL -eq 0 ]]; then
+    # Binary already at the pin — but only short-circuit when the service is
+    # genuinely installed and running; otherwise fall through and repair
+    # (a crash or power loss mid-install can leave a binary with no unit).
+    if systemctl is-enabled --quiet "$COMPONENT" 2>/dev/null \
+       && systemctl is-active --quiet "$COMPONENT"; then
         log info "$COMPONENT $TARGET already installed — verifying health"
         verify_service_health "$COMPONENT" "$TARGET"
         log info "nothing to do"
         exit 0
     fi
-    MODE="upgrade"
-    log info "upgrading $COMPONENT $CURRENT → $TARGET"
+    log warn "$COMPONENT $TARGET binary present but service missing/disabled/inactive — repairing"
 else
     log info "installing $COMPONENT $TARGET"
 fi
@@ -75,7 +81,7 @@ if systemctl is-active --quiet "$COMPONENT"; then
 fi
 
 # --- 7. Install the binaries -----------------------------------------------
-EXTRACTED=$(extract_tarball "$TARBALL")
+extract_tarball "$TARBALL" EXTRACTED
 install_binary "$EXTRACTED/prometheus" "prometheus"
 install_binary "$EXTRACTED/promtool" "promtool"
 
