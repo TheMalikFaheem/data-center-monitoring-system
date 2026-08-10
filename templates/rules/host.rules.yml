@@ -1,0 +1,110 @@
+# host.rules.yml — Prometheus alerting rules for host health.
+#
+# Installed to /etc/prometheus/rules/host.rules.yml by install-alertmanager.sh.
+# Validate:  promtool check rules /etc/prometheus/rules/host.rules.yml
+# Reload:    systemctl reload prometheus   (no restart needed for rule changes)
+#
+# All thresholds are conservative starting points — tune once you have a
+# baseline from a few days of data.
+
+groups:
+  - name: host_availability
+    rules:
+      # Fires if ANY scrape target has been unreachable for 5 consecutive minutes.
+      # This catches both exporter crashes and network splits.
+      - alert: InstanceDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Target {{ $labels.instance }} is down"
+          description: >
+            {{ $labels.instance }} (job={{ $labels.job }}) has been unreachable
+            for more than 5 minutes. Check the service and network path.
+
+  - name: host_resources
+    rules:
+      # CPU: 80% sustained for 10 minutes — reduces false positives from short bursts.
+      - alert: HighCPULoad
+        expr: >
+          100 - (
+            avg by (instance) (
+              rate(node_cpu_seconds_total{mode="idle"}[5m])
+            ) * 100
+          ) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.instance }}"
+          description: >
+            CPU is {{ $value | printf "%.1f" }}% used on {{ $labels.instance }}
+            (averaged over all cores for 10 minutes). Check for runaway processes.
+
+      # Memory: 85% used for 5 minutes.
+      - alert: HighMemoryUsage
+        expr: >
+          (1 - (
+            node_memory_MemAvailable_bytes /
+            node_memory_MemTotal_bytes
+          )) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory on {{ $labels.instance }}"
+          description: >
+            Memory usage is {{ $value | printf "%.1f" }}% on {{ $labels.instance }}.
+            MemAvailable is the Linux metric; it accounts for reclaimable caches.
+
+      # Disk: any non-tmpfs filesystem below 15% free.
+      - alert: LowDiskSpace
+        expr: >
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|devtmpfs|squashfs|fuse.lxcfs"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|devtmpfs|squashfs|fuse.lxcfs"}
+          ) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+          description: >
+            {{ $labels.mountpoint }} on {{ $labels.instance }} has
+            {{ $value | printf "%.1f" }}% free ({{ $labels.fstype }}).
+            Investigate large files or add capacity.
+
+      # Disk: critical — below 5% free (imminent write failures).
+      - alert: CriticalDiskSpace
+        expr: >
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|devtmpfs|squashfs|fuse.lxcfs"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|devtmpfs|squashfs|fuse.lxcfs"}
+          ) * 100 < 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: disk almost full on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+          description: >
+            {{ $labels.mountpoint }} on {{ $labels.instance }} has only
+            {{ $value | printf "%.1f" }}% free. Service writes are at risk.
+
+  - name: host_network
+    rules:
+      # Sustained inbound traffic spike — 100 MB/s threshold, tune to your baseline.
+      - alert: HighNetworkReceive
+        expr: >
+          rate(node_network_receive_bytes_total{device!~"lo|docker.*|veth.*|br-.*"}[5m])
+          / 1024 / 1024 > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High inbound traffic on {{ $labels.instance }}"
+          description: >
+            {{ $labels.instance }} interface {{ $labels.device }} is receiving
+            {{ $value | printf "%.1f" }} MB/s. This may be normal; check if unexpected.

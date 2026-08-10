@@ -17,14 +17,19 @@ global:
     monitor: {{HOSTNAME}}
     env: {{ENV_LABEL}}
 
-# Alerting/recording rule files will be listed here in Phase 2.
-rule_files: []
+# Alerting and recording rule files. The directory glob means any *.yml
+# file dropped into /etc/prometheus/rules/ is automatically loaded.
+# install-alertmanager.sh creates this directory and installs host.rules.yml.
+rule_files:
+  - /etc/prometheus/rules/*.yml
 
-# Phase 2: uncomment once Alertmanager is installed.
-# alerting:
-#   alertmanagers:
-#     - static_configs:
-#         - targets: ["127.0.0.1:9093"]
+# Alertmanager wiring — added in Phase 2 by install-alertmanager.sh.
+# This block is already rendered; install-alertmanager.sh detects and
+# preserves it on re-runs (idempotent).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["127.0.0.1:9093"]
 
 scrape_configs:
   # Prometheus scrapes its own /metrics endpoint — the monitor monitors itself.

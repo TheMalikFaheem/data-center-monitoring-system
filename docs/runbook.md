@@ -236,3 +236,167 @@ ghost when debugging.
 **Install failed halfway** — read `/var/log/monitoring/install.log`; the
 rollback trail is logged step by step. The system is left as it was before
 the run.
+
+---
+
+## 11. Phase 2 — Alertmanager, Loki, Alloy, Grafana
+
+### 11.1 Before you start
+
+Grafana's admin password must exist in the gitignored per-server override file
+**before** running the grafana installer. This file is never committed:
+
+```bash
+# On monitor01:
+cat >> /opt/monitoring/configs/environment.local.yml <<'EOF'
+grafana_admin_password: "choose_a_strong_password_here"
+EOF
+```
+
+### 11.2 Install (in dependency order)
+
+```bash
+cd /opt/monitoring
+git pull --ff-only
+
+# Option A — install each component individually (recommended first time):
+sudo ./monitorctl install alertmanager
+sudo ./monitorctl install loki
+sudo ./monitorctl install alloy
+sudo ./monitorctl install grafana
+
+# Option B — install all at once (uses INSTALL_ORDER from monitorctl):
+sudo ./monitorctl install all
+```
+
+What `install alertmanager` does beyond the standard skeleton:
+- installs `/etc/alertmanager/alertmanager.yml` (with email/webhook stubs)
+- creates `/etc/prometheus/rules/` and installs `host.rules.yml`
+- **patches the running `prometheus.yml`** to add `rule_files:` + `alerting:` block
+- reloads Prometheus without a restart — rules take effect immediately
+
+### 11.3 Verification
+
+```bash
+# All six components healthy:
+./monitorctl health
+
+# Versions match the pins:
+./monitorctl versions
+
+# Individual endpoint checks:
+curl -s http://127.0.0.1:9093/-/healthy      # alertmanager → OK
+curl -s http://127.0.0.1:3100/ready          # loki         → ready
+curl -s http://127.0.0.1:12345/-/ready       # alloy        → ready
+curl -s http://127.0.0.1:3000/api/health     # grafana      → {"database":"ok",...}
+
+# Prometheus sees all targets UP (should be 2 after P1, Alertmanager adds itself):
+curl -s 'http://127.0.0.1:9090/api/v1/targets' | grep -o '"health":"[a-z]*"'
+
+# Alertmanager rules loaded (expect host.rules.yml rules listed):
+curl -s 'http://127.0.0.1:9090/api/v1/rules' | python3 -m json.tool | grep -A2 '"name"'
+
+# Alloy is shipping logs (Loki should have data within 30s of Alloy starting):
+curl -s 'http://127.0.0.1:3100/loki/api/v1/query?query={job="journal"}' \
+    | python3 -m json.tool | head -20
+```
+
+### 11.4 SSH tunnels for web UIs (all four components)
+
+Open one multi-port tunnel session, or four separate ones:
+
+```bash
+# Single command — opens all four UIs at once:
+ssh -L 9090:127.0.0.1:9090 \
+    -L 9093:127.0.0.1:9093 \
+    -L 3100:127.0.0.1:3100 \
+    -L 3000:127.0.0.1:3000 \
+    root@107.170.11.210
+
+# Then browse:
+#   http://localhost:9090   Prometheus
+#   http://localhost:9093   Alertmanager
+#   http://localhost:3100   Loki (API only — use Grafana's Explore for queries)
+#   http://localhost:3000   Grafana (login: admin / your grafana_admin_password)
+```
+
+Grafana's **Explore → Loki** page is the log browser. Select the `Loki`
+datasource, use label selectors like `{job="journal", unit="prometheus.service"}`.
+
+### 11.5 Alertmanager: configuring notifications
+
+The initial `alertmanager.yml` is a working but silent config (null receiver).
+When ready to receive alerts:
+
+**Email (recommended for getting started):**
+
+1. Add SMTP credentials to `configs/environment.local.yml`:
+   ```yaml
+   smtp_smarthost: "smtp.gmail.com:587"
+   smtp_from: "alerts@yourdomain.com"
+   smtp_auth_username: "alerts@yourdomain.com"
+   smtp_auth_password: "your_app_password"
+   alert_email_to: "oncall@yourdomain.com"
+   ```
+
+2. Re-run the installer (idempotent — saves a `.new` diff file):
+   ```bash
+   sudo ./monitorctl install alertmanager --reinstall
+   ```
+
+3. Or edit `/etc/alertmanager/alertmanager.yml` directly:
+   - uncomment the `smtp_*` lines under `global:`
+   - add the `email` receiver
+   - add a route that points to it
+   - validate and reload:
+     ```bash
+     amtool check-config /etc/alertmanager/alertmanager.yml
+     systemctl reload alertmanager
+     ```
+
+**Test the pipeline end-to-end:**
+```bash
+# Fire a test alert via Alertmanager's API:
+curl -XPOST http://127.0.0.1:9093/api/v2/alerts \
+    -H 'Content-Type: application/json' \
+    -d '[{"labels":{"alertname":"TestAlert","severity":"warning","instance":"monitor01"},"annotations":{"summary":"Integration test — safe to ignore"}}]'
+
+# Check it appears in the Alertmanager UI or fires to your notification channel.
+```
+
+### 11.6 Managing alert rules
+
+Rules live in `/etc/prometheus/rules/`. The framework installs `host.rules.yml`
+with conservative thresholds for InstanceDown, CPU, memory, and disk. To add
+or change rules:
+
+```bash
+# Edit (or add a new file):
+nano /etc/prometheus/rules/host.rules.yml
+
+# Validate BEFORE reloading:
+promtool check rules /etc/prometheus/rules/host.rules.yml
+
+# Reload without restarting Prometheus (keeps TSDB hot):
+systemctl reload prometheus
+
+# Confirm rules loaded:
+curl -s http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool | grep '"name"'
+```
+
+### 11.7 Where Phase 2 data lives
+
+| What | Where |
+|---|---|
+| Alertmanager config | `/etc/alertmanager/alertmanager.yml` |
+| Alertmanager state | `/var/lib/alertmanager` |
+| Alert rules | `/etc/prometheus/rules/*.yml` |
+| Alloy config | `/etc/alloy/config.alloy` |
+| Loki config | `/etc/loki/loki.yml` |
+| Loki log chunks | `/var/lib/loki/chunks` |
+| Grafana config | `/etc/grafana/grafana.ini` |
+| Grafana provisioning | `/etc/grafana/provisioning/` |
+| Grafana dashboards | `/var/lib/grafana/dashboards/` |
+| Grafana database | `/var/lib/grafana/grafana.db` |
+| Service logs | `journalctl -u alertmanager\|loki\|alloy\|grafana-server` |
+

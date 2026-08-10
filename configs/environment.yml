@@ -9,8 +9,29 @@
 # Where each service listens. 127.0.0.1 = loopback only: nothing is reachable
 # from the network until the nginx reverse proxy phase. On a future on-prem
 # host, override node_exporter_listen in environment.local.yml with a LAN bind.
+# Phase 1 — Core
 prometheus_listen: "127.0.0.1:9090"
 node_exporter_listen: "127.0.0.1:9100"
+
+# Phase 2 — Platform
+# Override any of these in environment.local.yml if needed.
+alertmanager_listen: "127.0.0.1:9093"
+loki_listen: "127.0.0.1:3100"
+alloy_listen: "127.0.0.1:12345"
+grafana_listen: "127.0.0.1:3000"
+
+# Loki log retention (same format as prometheus_retention).
+loki_retention: "30d"
+
+# Alertmanager notification stubs — override in environment.local.yml.
+# smtp_smarthost: "smtp.example.com:587"
+# smtp_from: "alertmanager@example.com"
+# smtp_auth_username: "alertmanager@example.com"
+# smtp_auth_password: "changeme"
+# alert_email_to: "admin@example.com"
+
+# REQUIRED in environment.local.yml (never commit secrets to git):
+# grafana_admin_password: "your_strong_password_here"
 
 # How long Prometheus keeps metric history on disk.
 prometheus_retention: "30d"

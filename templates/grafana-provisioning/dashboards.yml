@@ -1,0 +1,20 @@
+# dashboards.yml — Grafana dashboard provisioning provider.
+#
+# Installed to /etc/grafana/provisioning/dashboards/monitoring.yml by
+# install-grafana.sh. No tokens — this file is copied verbatim.
+#
+# Grafana reads JSON dashboard files from /var/lib/grafana/dashboards/ and
+# auto-imports them. The installer downloads the Node Exporter Full dashboard
+# (ID 1860) into that directory.
+
+apiVersion: 1
+
+providers:
+  - name: monitoring-platform
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: false    # prevent UI edits from overwriting the JSON files
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true

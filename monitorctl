@@ -12,7 +12,9 @@ set -Eeuo pipefail
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/scripts/common.sh"
 
 # Dependency order for `install all` — grows as installers are added.
-INSTALL_ORDER=(node_exporter prometheus)
+# Order matters: alertmanager after prometheus (wiring step reloads it);
+# loki before alloy (alloy pushes to loki); grafana last (reads everything).
+INSTALL_ORDER=(node_exporter prometheus alertmanager loki alloy grafana)
 
 discover_components() {
     local f n
