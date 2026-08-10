@@ -77,46 +77,14 @@ if [[ -z "$CURRENT" ]]; then
 fi
 
 # --- 4. Download and verify ------------------------------------------------
-# redis_exporter uses per-file .sha256 checksums (not the Prometheus-style
-# combined sha256sums.txt). We handle this inline.
-TARBALL_NAME="redis_exporter-v${TARGET}.linux-amd64.tar.gz"
+# redis_exporter tarball naming: redis_exporter-v1.80.0.linux-amd64.tar.gz
+# (note: 'v' prefix in filename, dot before OS name)
+# Checksum file: sha256sums.txt (multi-hash, standard sha256sum format)
+# Confirmed assets via GitHub API: https://api.github.com/repos/oliver006/redis_exporter/releases/tags/v${VERSION}
 BASE="https://github.com/oliver006/redis_exporter/releases/download/v${TARGET}"
-TARBALL="$DOWNLOAD_DIR/$TARBALL_NAME"
-SHA256_FILE="$DOWNLOAD_DIR/$TARBALL_NAME.sha256"
-
-mkdir -p "$DOWNLOAD_DIR"
-log info "downloading checksum for $TARBALL_NAME"
-curl -fsSL --retry 3 --connect-timeout 10 \
-    -o "$SHA256_FILE" "$BASE/$TARBALL_NAME.sha256" \
-    || die "failed to download sha256 for $TARBALL_NAME"
-
-EXPECTED_HASH=$(awk '{print $1}' "$SHA256_FILE")
-if [[ -z "$EXPECTED_HASH" ]]; then
-    die "sha256 file is empty or malformed: $SHA256_FILE"
-fi
-
-if [[ -f "$TARBALL" ]]; then
-    ACTUAL_HASH=$(sha256sum "$TARBALL" | awk '{print $1}')
-    if [[ "$EXPECTED_HASH" == "$ACTUAL_HASH" ]]; then
-        log info "using cached $TARBALL_NAME (checksum OK)"
-    else
-        log info "cached tarball checksum mismatch — re-downloading"
-        rm -f "$TARBALL"
-    fi
-fi
-
-if [[ ! -f "$TARBALL" ]]; then
-    log info "downloading $TARBALL_NAME"
-    curl -fsSL --retry 3 --connect-timeout 10 \
-        -o "$TARBALL" "$BASE/$TARBALL_NAME" \
-        || die "download failed: $BASE/$TARBALL_NAME"
-    ACTUAL_HASH=$(sha256sum "$TARBALL" | awk '{print $1}')
-    if [[ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]]; then
-        rm -f "$TARBALL"
-        die "CHECKSUM FAILURE for $TARBALL_NAME — downloaded file removed"
-    fi
-    log info "checksum OK: $TARBALL_NAME"
-fi
+TARBALL=$(fetch_and_verify \
+    "$BASE/redis_exporter-v${TARGET}.linux-amd64.tar.gz" \
+    "$BASE/sha256sums.txt")
 
 # --- 5. User and directories -----------------------------------------------
 create_system_user "$COMPONENT"

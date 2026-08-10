@@ -65,10 +65,12 @@ if [[ -z "$CURRENT" ]]; then
 fi
 
 # --- 4. Download and verify ------------------------------------------------
-# process-exporter uses 'v0.8.7' tags; tarball name includes 'v' prefix.
+# process-exporter tarball naming: hyphens throughout (not underscores).
+# Confirmed filename: process-exporter-0.8.7.linux-amd64.tar.gz
+# Checksum file:      checksums.txt (multi-hash, standard sha256sum format)
 BASE="https://github.com/ncabatoff/process-exporter/releases/download/v${TARGET}"
 TARBALL=$(fetch_and_verify \
-    "$BASE/process-exporter_${TARGET}_linux_amd64.tar.gz" \
+    "$BASE/process-exporter-${TARGET}.linux-amd64.tar.gz" \
     "$BASE/checksums.txt")
 
 # --- 5. Directories (no dedicated system user — service runs as root) -------
@@ -86,9 +88,10 @@ extract_tarball "$TARBALL" EXTRACTED
 # The binary inside the tarball is 'process-exporter'; install it as
 # 'process_exporter' (underscore) so installed_version() finds it at the
 # expected path /usr/local/bin/process_exporter.
-EXPORTER_BIN="$EXTRACTED/process-exporter"
+# Tarball layout: process-exporter-0.8.7.linux-amd64/process-exporter
+EXPORTER_BIN="$EXTRACTED/process-exporter-${TARGET}.linux-amd64/process-exporter"
 if [[ ! -f "$EXPORTER_BIN" ]]; then
-    # Some release layouts put it at the top level without a subdirectory.
+    # Fallback: search anywhere in the extracted tree.
     EXPORTER_BIN=$(find "$EXTRACTED" -name "process-exporter" -type f -print -quit)
     [[ -n "$EXPORTER_BIN" ]] || die "could not find process-exporter binary in tarball"
 fi

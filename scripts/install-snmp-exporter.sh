@@ -110,7 +110,12 @@ add_prometheus_scrape_job "snmp" <<'YAML'
   # Each target is a network device IP. The module param selects which
   # snmp.yml auth/walk profile to use (if_mib covers most switches/routers).
   # Common modules: if_mib, mikrotik, cisco, apc_ups, pdu_eaton, printer_mib
+  #
+  # scrape_interval is set to 60s (overrides the global 15s) because SNMP
+  # walks are slow. scrape_timeout must be less than scrape_interval.
   - job_name: snmp
+    scrape_interval: 60s
+    scrape_timeout: 30s
     metrics_path: /snmp
     params:
       module: [if_mib]
@@ -124,8 +129,6 @@ add_prometheus_scrape_job "snmp" <<'YAML'
         target_label: instance
       - target_label: __address__
         replacement: 127.0.0.1:9116
-    # Increase timeout for slow SNMP walks:
-    scrape_timeout: 30s
 YAML
 
 finish_install
