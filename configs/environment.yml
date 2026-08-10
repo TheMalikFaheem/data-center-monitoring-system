@@ -42,3 +42,17 @@ scrape_interval: "15s"
 # Attached to every metric as an external label (useful once several
 # environments feed one Grafana).
 external_label_env: "production"
+
+# Phase 3 — Exporters
+# Override any of these in environment.local.yml if needed.
+blackbox_exporter_listen: "127.0.0.1:9115"
+snmp_exporter_listen:     "127.0.0.1:9116"
+process_exporter_listen:  "127.0.0.1:9256"
+mysqld_exporter_listen:   "127.0.0.1:9104"
+postgres_exporter_listen: "127.0.0.1:9187"
+redis_exporter_listen:    "127.0.0.1:9121"
+
+# REQUIRED in environment.local.yml for database exporters (never commit):
+# mysql_dsn:    "exporter:password@tcp(127.0.0.1:3306)/"
+# postgres_dsn: "postgresql://exporter:password@localhost:5432/postgres?sslmode=disable"
+# redis_addr:   "redis://localhost:6379"

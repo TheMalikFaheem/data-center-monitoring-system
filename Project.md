@@ -63,7 +63,7 @@ server → `sudo ./monitorctl install|update`.
 |---|---|---|
 | **P1 — Core** | framework, `monitorctl`, Prometheus + node_exporter installers, runbook | **built — awaiting verification on monitor01** |
 | **P2 — Platform** | Alertmanager, Loki, Alloy, Grafana; alerting wired; host rules; Node Exporter Full dashboard | **built — deploy after P1 verification** |
-| P3 — Exporters | blackbox, snmp, process, mysqld, postgres, redis | |
+| **P3 — Exporters** | blackbox (HTTP/TCP/ICMP), snmp, process, mysqld, postgres, redis | **built — deploy after P2 verification** |
 | P4 — Operations | backup.sh, restore.sh, uninstall.sh | |
 | P5 — Edge | nginx + certbot HTTPS; authenticated remote_write/Loki push for on-prem agents; UFW 80/443 | |
 | P6 — Watchdog | systemd timer → healthcheck.sh → Alertmanager | |

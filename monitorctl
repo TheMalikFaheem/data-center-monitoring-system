@@ -14,7 +14,11 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/scripts/common.sh"
 # Dependency order for `install all` — grows as installers are added.
 # Order matters: alertmanager after prometheus (wiring step reloads it);
 # loki before alloy (alloy pushes to loki); grafana last (reads everything).
-INSTALL_ORDER=(node_exporter prometheus alertmanager loki alloy grafana)
+# Database exporters (mysqld, postgres, redis) are NOT in INSTALL_ORDER —
+# they require credentials in environment.local.yml; install them manually:
+#   sudo ./monitorctl install mysqld_exporter
+INSTALL_ORDER=(node_exporter prometheus alertmanager loki alloy grafana
+               blackbox_exporter snmp_exporter process_exporter)
 
 discover_components() {
     local f n

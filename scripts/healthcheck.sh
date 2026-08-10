@@ -16,7 +16,8 @@ source "$(dirname "$(readlink -f "$0")")/common.sh"
 # reasons to abort.
 
 COMPONENTS=(prometheus node_exporter alertmanager grafana loki alloy
-            blackbox_exporter snmp_exporter process_exporter)
+            blackbox_exporter snmp_exporter process_exporter
+            mysqld_exporter postgres_exporter redis_exporter)
 if [[ -n "${1:-}" ]]; then
     if [[ -z "${HEALTH_URL[$1]:-}" ]]; then
         echo "unknown component '$1' — valid: ${!HEALTH_URL[*]}" >&2

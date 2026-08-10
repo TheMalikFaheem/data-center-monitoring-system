@@ -47,6 +47,10 @@ declare -A HEALTH_URL=(
     [blackbox_exporter]="http://127.0.0.1:9115/metrics"
     [snmp_exporter]="http://127.0.0.1:9116/metrics"
     [process_exporter]="http://127.0.0.1:9256/metrics"
+    # Phase 3 — database exporters
+    [mysqld_exporter]="http://127.0.0.1:9104/metrics"
+    [postgres_exporter]="http://127.0.0.1:9187/metrics"
+    [redis_exporter]="http://127.0.0.1:9121/metrics"
 )
 
 # ---------------------------------------------------------------------------
@@ -504,6 +508,10 @@ installed_version() {
     # The || true isolates the binary's own exit status: a corrupt/truncated
     # binary (exit 126) must read as "not installed", not abort the caller.
     out=$({ "$exe" --version 2>&1 || true; } | awk 'NR==1 {v=$3} END {if (v != "") print v}')
+    # Strip a leading 'v' prefix if present. redis_exporter outputs
+    # "redis_exporter version v1.80.0" so raw $3 = "v1.80.0"; without
+    # stripping, the ^[0-9] guard below would discard it as non-version text.
+    out=${out#v}
     # Only emit something version-shaped — bash's "cannot execute binary
     # file" error text would otherwise be parsed as a version.
     if [[ "$out" =~ ^[0-9]+\.[0-9]+ ]]; then
@@ -530,4 +538,57 @@ verify_service_health() {
         die "$component reports version '$actual', expected '$expected'"
     fi
     log info "$component healthy: active, answering, version $actual"
+}
+
+# ---------------------------------------------------------------------------
+# Prometheus scrape job registration
+# ---------------------------------------------------------------------------
+# add_prometheus_scrape_job <job_name> — reads YAML config from stdin and
+# appends it to /etc/prometheus/prometheus.yml if the job is not already
+# registered. Validates with promtool and reloads Prometheus.
+#
+# Since scrape_configs: is the last top-level key in prometheus.yml, YAML
+# list items appended at EOF are valid and become part of that sequence.
+#
+# Usage (heredoc ensures proper indentation):
+#   add_prometheus_scrape_job "my_job" <<'YAML'
+#
+#     - job_name: my_job
+#       static_configs:
+#         - targets: ['127.0.0.1:9999']
+#   YAML
+add_prometheus_scrape_job() {
+    local job_name="$1"
+    local config prom_config="/etc/prometheus/prometheus.yml"
+    config=$(cat)   # read the YAML snippet from stdin
+
+    if [[ ! -f "$prom_config" ]]; then
+        log warn "prometheus.yml not found at $prom_config — skipping scrape job '$job_name'"
+        log warn "Install Prometheus first, then re-run: monitorctl install ${job_name%_*}"
+        return 0
+    fi
+
+    if grep -q "job_name: ${job_name}" "$prom_config" 2>/dev/null; then
+        log info "prometheus scrape job '$job_name' already registered — skipping"
+        return 0
+    fi
+
+    log info "registering prometheus scrape job: $job_name"
+    local bak="$prom_config.pre-${job_name}.$(date +%Y%m%d%H%M%S)"
+    cp -f "$prom_config" "$bak"
+
+    # Append the config block at EOF (valid YAML: scrape_configs is last key)
+    printf '%s\n' "$config" >> "$prom_config"
+
+    if ! promtool check config "$prom_config"; then
+        cp -f "$bak" "$prom_config"
+        die "promtool rejected prometheus.yml after adding '$job_name' — original restored from $bak"
+    fi
+
+    if systemctl is-active --quiet prometheus 2>/dev/null; then
+        systemctl reload prometheus
+        log info "prometheus reloaded — scrape job '$job_name' now active"
+    else
+        log warn "prometheus not running — '$job_name' added to config but not yet reloaded"
+    fi
 }
