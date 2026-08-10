@@ -503,17 +503,24 @@ installed_version() {
     if [[ ! -f "$exe" || ! -x "$exe" ]]; then
         exe=$(command -v "$bin") || return 0
     fi
-    # awk must consume ALL input (no early exit): under pipefail, an awk that
-    # quits while --version is still printing kills the pipeline with SIGPIPE.
-    # The || true isolates the binary's own exit status: a corrupt/truncated
-    # binary (exit 126) must read as "not installed", not abort the caller.
-    out=$({ "$exe" --version 2>&1 || true; } | awk 'NR==1 {v=$3} END {if (v != "") print v}')
-    # Strip a leading 'v' prefix if present. redis_exporter outputs
-    # "redis_exporter version v1.80.0" so raw $3 = "v1.80.0"; without
-    # stripping, the ^[0-9] guard below would discard it as non-version text.
-    out=${out#v}
-    # Only emit something version-shaped — bash's "cannot execute binary
-    # file" error text would otherwise be parsed as a version.
+    # Scan ALL fields of the first output line for a semver-shaped token
+    # (X.Y.Z or X.Y with optional v/V prefix). This handles:
+    #   - Prometheus ecosystem: "name, version 3.6.0 (...)"  → field 3 = "3.6.0"
+    #   - redis_exporter:       "redis_exporter version v1.80.0 (go...)" → field 3
+    #   - Any binary where the version happens to be at a different position
+    # The awk regex anchors on ^ and $ so partial token matches (e.g.
+    # "127.0.0.1:9121") are not accepted as version strings.
+    out=$({ "$exe" --version 2>&1 || true; } | awk '
+        NR==1 {
+            for (i = 1; i <= NF; i++) {
+                t = $i
+                sub(/^[Vv]/, "", t)   # strip leading V or v
+                if (t ~ /^[0-9]+[.][0-9]+([.][0-9]+)?$/) { print t; exit }
+            }
+        }
+    ')
+    # Only emit something version-shaped — bash error text would otherwise be
+    # parsed as a version.
     if [[ "$out" =~ ^[0-9]+\.[0-9]+ ]]; then
         printf '%s\n' "$out"
     fi

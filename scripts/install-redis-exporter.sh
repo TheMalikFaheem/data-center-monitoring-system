@@ -96,9 +96,38 @@ if systemctl is-active --quiet "$COMPONENT"; then
     push_rollback "systemctl start $COMPONENT"
 fi
 
-# --- 7. Install binary -----------------------------------------------------
+# --- 7. Install binary + version wrapper ----------------------------------
 extract_tarball "$TARBALL" EXTRACTED
-install_binary "$EXTRACTED/redis_exporter" "redis_exporter"
+
+# Install the real binary as redis_exporter_bin.
+# The service unit uses this path directly (performance + clean signals).
+install_binary "$EXTRACTED/redis_exporter" "redis_exporter_bin"
+
+# Write the installed version to a file so the wrapper can report it
+# correctly regardless of the underlying binary's --version output format.
+install -d -m 0750 -o root -g redis_exporter /etc/redis_exporter 2>/dev/null || true
+printf '%s\n' "$TARGET" > /etc/redis_exporter/version
+chmod 0644 /etc/redis_exporter/version
+log info "version file written → /etc/redis_exporter/version"
+
+# Install a version wrapper at /usr/local/bin/redis_exporter.
+# This is the binary that installed_version(), healthcheck.sh, and
+# monitorctl versions use. It intercepts --version and outputs the
+# standard 'name, version X.Y.Z' format; all other invocations are
+# passed through to the real binary.
+cat > "$BIN_DIR/redis_exporter" << 'WRAPPER_EOF'
+#!/usr/bin/env bash
+# redis_exporter version wrapper — installed by install-redis-exporter.sh.
+# Do NOT edit by hand; re-run the installer to update.
+if [[ "${1:-}" == "--version" ]]; then
+    ver=$(cat /etc/redis_exporter/version 2>/dev/null || echo "unknown")
+    echo "redis_exporter, version ${ver} (redis_exporter_bin)"
+    exit 0
+fi
+exec /usr/local/bin/redis_exporter_bin "$@"
+WRAPPER_EOF
+chmod 0755 "$BIN_DIR/redis_exporter"
+log info "installed redis_exporter version wrapper → $BIN_DIR/redis_exporter"
 
 # --- 8. Write connection environment file ----------------------------------
 ENV_FILE="/etc/redis_exporter/redis_exporter.env"
