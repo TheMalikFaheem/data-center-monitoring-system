@@ -147,8 +147,10 @@ EOF
 _add_grafana_apt_repo
 
 # --- 6. Find exact apt version string for the pinned version ---------------
+# Note: 'awk ... exit' closes the pipe early causing SIGPIPE (exit 141) under
+# set -o pipefail. '|| true' suppresses the benign pipe error.
 APT_VER=$(apt-cache show grafana 2>/dev/null \
-    | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}')
+    | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
 
 if [[ -z "$APT_VER" ]]; then
     log warn "grafana $TARGET not found in apt cache — refreshing"
@@ -156,7 +158,7 @@ if [[ -z "$APT_VER" ]]; then
         apt-get -o DPkg::Lock::Timeout=300 update \
         || log warn "apt update failed — trying with stale cache"
     APT_VER=$(apt-cache show grafana 2>/dev/null \
-        | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}')
+        | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
 fi
 
 [[ -n "$APT_VER" ]] || die "grafana $TARGET not available in Grafana apt repo — check configs/versions.yml"

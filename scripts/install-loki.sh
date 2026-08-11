@@ -68,7 +68,7 @@ fi
 BASE="https://github.com/grafana/loki/releases/download/v${TARGET}"
 ZIP_NAME="loki-linux-amd64.zip"
 ZIP_URL="$BASE/$ZIP_NAME"
-SUMS_URL="$BASE/sha256sum.txt"
+SUMS_URL="$BASE/SHA256SUMS"
 
 ZIP_FILE="$DOWNLOAD_DIR/$ZIP_NAME"
 SUMS_FILE="$DOWNLOAD_DIR/$ZIP_NAME.sha256sums"

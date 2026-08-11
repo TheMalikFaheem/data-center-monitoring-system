@@ -102,8 +102,10 @@ _add_grafana_apt_repo
 # --- 5. Find exact apt version string for the pinned version ---------------
 # apt version strings may have a suffix (e.g. "1.11.1-1"). We look for an
 # apt version that starts with the pinned version and use it for pinned install.
+# Note: 'awk ... exit' closes the pipe early — SIGPIPE under set -o pipefail.
+# '|| true' suppresses the benign pipe exit.
 APT_VER=$(apt-cache show alloy 2>/dev/null \
-    | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}')
+    | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
 
 if [[ -z "$APT_VER" ]]; then
     # Refresh and retry once — the cache may predate the repo addition.
@@ -112,7 +114,7 @@ if [[ -z "$APT_VER" ]]; then
         apt-get -o DPkg::Lock::Timeout=300 update \
         || log warn "apt update failed — trying with stale cache"
     APT_VER=$(apt-cache show alloy 2>/dev/null \
-        | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}')
+        | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
 fi
 
 if [[ -z "$APT_VER" ]]; then
