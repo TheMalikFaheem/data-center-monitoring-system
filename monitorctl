@@ -18,7 +18,8 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/scripts/common.sh"
 # they require credentials in environment.local.yml; install them manually:
 #   sudo ./monitorctl install mysqld_exporter
 INSTALL_ORDER=(node_exporter prometheus alertmanager loki alloy grafana
-               blackbox_exporter snmp_exporter process_exporter)
+               blackbox_exporter snmp_exporter process_exporter
+               watchdog)
 
 discover_components() {
     local f n
@@ -45,6 +46,9 @@ Usage:
   monitorctl health [component]         Health checks: active + HTTP + version vs pin
   monitorctl versions                   Pinned vs installed versions, drift marked
   monitorctl update                     Re-run installers where installed != pinned
+  monitorctl backup [--quiet]           Snapshot backup → /var/backups/monitoring/
+  monitorctl restore <tarball> [--yes]  Restore from a backup archive
+  monitorctl uninstall <comp|all>       Remove components (--purge to delete data)
 
 Components:
 $(discover_components | sed 's/^/  /')
@@ -136,6 +140,18 @@ case "$cmd" in
         if [[ $updated -eq 0 ]]; then
             log info "everything already matches configs/versions.yml"
         fi
+        ;;
+
+    backup)
+        exec "$REPO_DIR/scripts/backup.sh" "$@"
+        ;;
+
+    restore)
+        exec "$REPO_DIR/scripts/restore.sh" "$@"
+        ;;
+
+    uninstall)
+        exec "$REPO_DIR/scripts/uninstall.sh" "$@"
         ;;
 
     ""|help|-h|--help)

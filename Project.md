@@ -64,9 +64,9 @@ server → `sudo ./monitorctl install|update`.
 | **P1 — Core** | framework, `monitorctl`, Prometheus + node_exporter installers, runbook | **built — awaiting verification on monitor01** |
 | **P2 — Platform** | Alertmanager, Loki, Alloy, Grafana; alerting wired; host rules; Node Exporter Full dashboard | **built — deploy after P1 verification** |
 | **P3 — Exporters** | blackbox (HTTP/TCP/ICMP), snmp, process, mysqld, postgres, redis | **built — deploy after P2 verification** |
-| P4 — Operations | backup.sh, restore.sh, uninstall.sh | |
-| P5 — Edge | nginx + certbot HTTPS; authenticated remote_write/Loki push for on-prem agents; UFW 80/443 | |
-| P6 — Watchdog | systemd timer → healthcheck.sh → Alertmanager | |
+| **P4 — Operations** | backup.sh (quiesced snapshot, rotation), restore.sh (verified restore), uninstall.sh (component registry, --purge) | **built** |
+| **P5 — Edge** | nginx + certbot HTTPS; basic auth on Prometheus/Alertmanager; remote_write + Loki push for on-prem agents; UFW | **built** |
+| **P6 — Watchdog** | monitoring-watchdog.service + .timer (5 min); watchdog-alert.sh → Alertmanager API direct; dead-letter fallback | **built** |
 | P7+ — Onboarding | Proxmox, pfSense, switches, iDRAC, databases, apps, websites, dashboards | |
 
 ## Decisions log

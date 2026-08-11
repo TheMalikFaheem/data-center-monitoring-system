@@ -1,0 +1,38 @@
+# monitoring-watchdog.service — oneshot health-check service driven by the
+# accompanying .timer. Runs healthcheck.sh; on failure fires watchdog-alert.sh
+# directly to Alertmanager (bypassing Prometheus, which may be down).
+#
+# View results:
+#   journalctl -u monitoring-watchdog -n 50
+#   systemctl --failed
+
+[Unit]
+Description=Monitoring Stack Watchdog Health Check
+Documentation=file:///opt/monitoring/docs/runbook.md
+# Allow the timer to fire even if a previous run is still active (slow system).
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Run healthcheck.sh; if it exits non-zero, pipe to watchdog-alert.sh.
+# The || chain means: if healthcheck fails → run alert script.
+# If alert script also fails → this unit exits non-zero → appears in
+# systemctl --failed, making the failure visible even when both
+# Prometheus and Alertmanager are down.
+ExecStart=/bin/bash -c '\
+    /opt/monitoring/scripts/healthcheck.sh \
+    || /opt/monitoring/scripts/watchdog-alert.sh'
+
+# Suppress stdout (healthcheck output goes to journald via stderr).
+# Keep stderr so failures appear in: journalctl -u monitoring-watchdog
+StandardOutput=null
+StandardError=journal
+SyslogIdentifier=monitoring-watchdog
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Do NOT restart on failure — the timer handles re-firing.
+# If we restart on failure we'd flood Alertmanager with alerts.
+Restart=no

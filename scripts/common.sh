@@ -104,6 +104,15 @@ declare -a _TMPDIRS=()
 
 push_rollback() { _ROLLBACK+=("$*"); }
 
+# pop_rollback — remove the most recently pushed rollback step.
+# Use when you've already executed the undo action inline and don't
+# want the error trap to run it again (e.g. restart after quiesce copy).
+pop_rollback() {
+    if (( ${#_ROLLBACK[@]} > 0 )); then
+        unset '_ROLLBACK[-1]'
+    fi
+}
+
 run_rollback() {
     local n=${#_ROLLBACK[@]} i
     if (( n > 0 )); then

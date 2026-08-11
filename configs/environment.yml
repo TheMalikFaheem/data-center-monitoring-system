@@ -56,3 +56,19 @@ redis_exporter_listen:    "127.0.0.1:9121"
 # mysql_dsn:    "exporter:password@tcp(127.0.0.1:3306)/"
 # postgres_dsn: "postgresql://exporter:password@localhost:5432/postgres?sslmode=disable"
 # redis_addr:   "redis://localhost:6379"
+
+# Phase 4 — Operations (backup)
+# How many backup archives to keep before rotating old ones.
+backup_keep: "7"
+
+# Phase 5 — Edge (nginx + HTTPS)
+# REQUIRED in environment.local.yml before running install-nginx.sh:
+# nginx_domain:           "monitor01.example.com"   # DNS A record → this server
+# nginx_admin_user:       "admin"                    # basic auth username
+# nginx_admin_password:   "your-strong-password"     # basic auth password
+# nginx_certbot_email:    "you@example.com"           # optional, for cert expiry alerts
+
+# Phase 6 — Watchdog
+# Alertmanager URL for the watchdog to POST alerts to.
+# Override in environment.local.yml if Alertmanager is on a non-default port.
+watchdog_alertmanager_url: "http://127.0.0.1:9093"
