@@ -1,0 +1,93 @@
+# ssl.rules.yml — Prometheus alerting rules for SSL certificate and website health.
+#
+# Installed to /etc/prometheus/rules/ssl.rules.yml by install-alertmanager.sh.
+# Requires: blackbox_exporter installed and HTTP targets configured in inventory.yml.
+#
+# Validate:  promtool check rules /etc/prometheus/rules/ssl.rules.yml
+# Reload:    systemctl reload prometheus
+
+groups:
+  - name: ssl_certificates
+    rules:
+      # SSL certificate expiring within 30 days — time to renew
+      - alert: SSLCertExpiringSoon
+        expr: >
+          probe_ssl_earliest_cert_expiry - time() < 86400 * 30
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL cert expiring soon: {{ $labels.instance }}"
+          description: >
+            SSL certificate for {{ $labels.instance }} expires in
+            {{ $value | humanizeDuration }}. Renew it before it expires
+            to avoid browser warnings and service disruption.
+
+      # SSL certificate expiring within 7 days — urgent
+      - alert: SSLCertExpiringCritical
+        expr: >
+          probe_ssl_earliest_cert_expiry - time() < 86400 * 7
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: SSL cert expires in < 7 days: {{ $labels.instance }}"
+          description: >
+            SSL certificate for {{ $labels.instance }} expires in
+            {{ $value | humanizeDuration }}. Immediate renewal required.
+
+      # SSL certificate has expired
+      - alert: SSLCertExpired
+        expr: >
+          probe_ssl_earliest_cert_expiry - time() < 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SSL cert EXPIRED: {{ $labels.instance }}"
+          description: >
+            SSL certificate for {{ $labels.instance }} has expired.
+            Users will see security warnings. Renew immediately.
+
+  - name: website_availability
+    rules:
+      # Website/endpoint is not returning HTTP 2xx
+      - alert: WebsiteDown
+        expr: probe_success{job="blackbox_http"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Website down: {{ $labels.instance }}"
+          description: >
+            HTTP probe to {{ $labels.instance }} has been failing for
+            more than 5 minutes. Check the web server, application, and DNS.
+
+      # Website responding but slow (>5 seconds)
+      - alert: WebsiteSlowResponse
+        expr: >
+          probe_duration_seconds{job="blackbox_http"} > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow website: {{ $labels.instance }}"
+          description: >
+            {{ $labels.instance }} is responding but taking
+            {{ $value | printf "%.1f" }}s (threshold: 5s) for more than 10 minutes.
+            Check application performance, database queries, or server load.
+
+  - name: tcp_probes
+    rules:
+      # TCP port unreachable (database port, service port)
+      - alert: TCPPortDown
+        expr: probe_success{job="blackbox_tcp"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TCP port unreachable: {{ $labels.instance }}"
+          description: >
+            TCP connectivity check to {{ $labels.instance }} has been
+            failing for more than 5 minutes. The service may be down
+            or the port is blocked by a firewall.

@@ -72,3 +72,23 @@ backup_keep: "7"
 # Alertmanager URL for the watchdog to POST alerts to.
 # Override in environment.local.yml if Alertmanager is on a non-default port.
 watchdog_alertmanager_url: "http://127.0.0.1:9093"
+
+# Phase 7 — Alertmanager Notifications
+# Telegram bot alerts — set in environment.local.yml (gitignored, never commit):
+#   telegram_bot_token: "123456789:ABCDef_your_token_here"
+#   telegram_chat_id: "-123456789"    # negative = group chat, positive = direct message
+#
+# HOW TO CREATE A TELEGRAM BOT:
+#   1. Open Telegram → search @BotFather → /newbot → follow prompts
+#   2. Copy the bot token shown at the end
+#   3. Send any message to your bot (to activate the chat)
+#   4. Get your chat ID: https://api.telegram.org/bot<TOKEN>/getUpdates
+#      Look for "chat":{"id": <number>}
+#   5. Add to configs/environment.local.yml:
+#        telegram_bot_token: "your_token"
+#        telegram_chat_id: "your_chat_id"
+#   6. Re-render alertmanager: sudo ./monitorctl install alertmanager --reinstall
+
+# SNMP community string for polling switches/pfSense/iDRAC.
+# Default is "public" — override in environment.local.yml if your devices use a different string.
+snmp_community: "public"

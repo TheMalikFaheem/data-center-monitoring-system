@@ -1,0 +1,236 @@
+# database.rules.yml — Prometheus alerting rules for MySQL, PostgreSQL, and Redis.
+#
+# Installed to /etc/prometheus/rules/database.rules.yml by install-alertmanager.sh.
+# Requires the respective exporters installed and running:
+#   sudo ./monitorctl install mysqld_exporter
+#   sudo ./monitorctl install postgres_exporter
+#   sudo ./monitorctl install redis_exporter
+#
+# Validate:  promtool check rules /etc/prometheus/rules/database.rules.yml
+# Reload:    systemctl reload prometheus
+
+groups:
+  # ─────────────────────────────────────────────────────────────────────────
+  # MySQL / MariaDB
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: mysql
+    rules:
+      # MySQL exporter can't connect — DB is down or credentials invalid
+      - alert: MySQLDown
+        expr: mysql_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MySQL down: {{ $labels.instance }}"
+          description: >
+            mysqld_exporter cannot connect to MySQL on {{ $labels.instance }}.
+            The server may be crashed, the mysqld process stopped, or credentials
+            in environment.local.yml are wrong.
+
+      # Too many connections — approaching max_connections limit
+      - alert: MySQLTooManyConnections
+        expr: >
+          mysql_global_status_threads_connected /
+          mysql_global_variables_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL high connections: {{ $labels.instance }}"
+          description: >
+            MySQL on {{ $labels.instance }} is using
+            {{ $value | printf "%.1f" }}% of max_connections.
+            Risk of connection refusals. Check for connection leaks or
+            increase max_connections.
+
+      # Replication lag > 30 seconds (replica is falling behind)
+      - alert: MySQLReplicationLag
+        expr: >
+          mysql_slave_status_seconds_behind_master > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL replication lag: {{ $labels.instance }}"
+          description: >
+            MySQL replica on {{ $labels.instance }} is {{ $value | printf "%.0f" }}s
+            behind the primary. Check network, disk I/O, and replication thread status.
+
+      # High slow query rate
+      - alert: MySQLSlowQueries
+        expr: >
+          rate(mysql_global_status_slow_queries[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL slow queries: {{ $labels.instance }}"
+          description: >
+            MySQL on {{ $labels.instance }} is logging
+            {{ $value | printf "%.2f" }} slow queries/sec.
+            Check slow query log and add missing indexes.
+
+      # InnoDB buffer pool cache hit ratio < 90%
+      - alert: MySQLLowBufferPoolHitRatio
+        expr: >
+          (
+            rate(mysql_global_status_innodb_buffer_pool_read_requests[5m]) -
+            rate(mysql_global_status_innodb_buffer_pool_reads[5m])
+          ) /
+          rate(mysql_global_status_innodb_buffer_pool_read_requests[5m]) * 100 < 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL low buffer pool hit ratio: {{ $labels.instance }}"
+          description: >
+            InnoDB buffer pool hit ratio on {{ $labels.instance }} is
+            {{ $value | printf "%.1f" }}% (threshold: 90%). Consider increasing
+            innodb_buffer_pool_size if memory is available.
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # PostgreSQL
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: postgresql
+    rules:
+      # postgres_exporter can't connect
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL down: {{ $labels.instance }}"
+          description: >
+            postgres_exporter cannot connect to PostgreSQL on {{ $labels.instance }}.
+            The server may be crashed, stopped, or credentials are wrong.
+
+      # Too many connections
+      - alert: PostgreSQLTooManyConnections
+        expr: >
+          sum by (instance) (pg_stat_activity_count) /
+          pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL high connections: {{ $labels.instance }}"
+          description: >
+            PostgreSQL on {{ $labels.instance }} is using
+            {{ $value | printf "%.1f" }}% of max_connections.
+
+      # Many dead tuples — autovacuum may be behind
+      - alert: PostgreSQLHighDeadTuples
+        expr: >
+          sum by (instance, relname) (pg_stat_user_tables_n_dead_tup) > 100000
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL dead tuples: {{ $labels.instance }}/{{ $labels.relname }}"
+          description: >
+            Table {{ $labels.relname }} on {{ $labels.instance }} has
+            {{ $value | humanize }} dead tuples. VACUUM may not be keeping up.
+            Run: VACUUM ANALYZE {{ $labels.relname }};
+
+      # Cache hit ratio < 90%
+      - alert: PostgreSQLLowCacheHitRatio
+        expr: >
+          sum by (instance) (pg_stat_database_blks_hit) /
+          (
+            sum by (instance) (pg_stat_database_blks_hit) +
+            sum by (instance) (pg_stat_database_blks_read)
+          ) * 100 < 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL low cache hit ratio: {{ $labels.instance }}"
+          description: >
+            PostgreSQL cache hit ratio on {{ $labels.instance }} is
+            {{ $value | printf "%.1f" }}%. Consider increasing shared_buffers.
+
+      # Long-running queries (> 5 minutes)
+      - alert: PostgreSQLLongRunningQuery
+        expr: >
+          pg_stat_activity_max_tx_duration{state="active"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL long query: {{ $labels.instance }}"
+          description: >
+            A query on {{ $labels.instance }} has been running for
+            {{ $value | printf "%.0f" }}s. Check pg_stat_activity for blocking queries.
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Redis
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: redis
+    rules:
+      # redis_exporter can't connect
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis down: {{ $labels.instance }}"
+          description: >
+            redis_exporter cannot connect to Redis on {{ $labels.instance }}.
+            The Redis process may have crashed or been stopped.
+
+      # Memory usage > 90% of maxmemory
+      - alert: RedisMemoryHigh
+        expr: >
+          redis_memory_used_bytes / redis_memory_max_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis high memory: {{ $labels.instance }}"
+          description: >
+            Redis on {{ $labels.instance }} is using
+            {{ $value | printf "%.1f" }}% of maxmemory. Evictions may be occurring.
+            Consider increasing maxmemory or reducing data volume.
+
+      # High eviction rate — Redis is dropping keys due to memory pressure
+      - alert: RedisHighEvictionRate
+        expr: >
+          rate(redis_evicted_keys_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis evicting keys: {{ $labels.instance }}"
+          description: >
+            Redis on {{ $labels.instance }} is evicting
+            {{ $value | printf "%.1f" }} keys/sec. Cache hit rate is degrading.
+            Increase maxmemory or review eviction policy.
+
+      # Master-replica link down
+      - alert: RedisReplicationBroken
+        expr: redis_connected_slaves == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis replication broken: {{ $labels.instance }}"
+          description: >
+            Redis primary on {{ $labels.instance }} has 0 connected replicas.
+            The replica may have crashed or lost network connectivity.
+            Check replica with: redis-cli -h <replica-ip> INFO replication
+
+      # Redis is rejecting commands (maxmemory-policy = noeviction and memory full)
+      - alert: RedisCommandsRejected
+        expr: >
+          rate(redis_rejected_connections_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis rejecting connections: {{ $labels.instance }}"
+          description: >
+            Redis on {{ $labels.instance }} is rejecting connections.
+            Memory limit reached with noeviction policy.

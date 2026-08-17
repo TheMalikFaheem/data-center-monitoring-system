@@ -262,26 +262,45 @@ if [[ ! -f "$PROV_DASH" ]] || ! cmp -s "$TEMPLATE_DIR/grafana-provisioning/dashb
     log info "installed dashboard provisioning → $PROV_DASH"
 fi
 
-# --- 12. Download Node Exporter Full dashboard (ID 1860) -------------------
+# --- 12. Download dashboards -----------------------------------------------
 DASH_DIR="/var/lib/grafana/dashboards"
 mkdir -p "$DASH_DIR"
 chown grafana:grafana "$DASH_DIR" 2>/dev/null || chown root:root "$DASH_DIR"
 
-DASH_FILE="$DASH_DIR/node-exporter-full.json"
-if [[ ! -f "$DASH_FILE" ]]; then
-    log info "downloading Node Exporter Full dashboard (grafana.com ID 1860)"
-    if curl -fsSL --retry 2 --connect-timeout 10 \
-        "https://grafana.com/api/dashboards/1860/revisions/latest/download" \
-        -o "$DASH_FILE"; then
-        chown grafana:grafana "$DASH_FILE" 2>/dev/null || true
-        log info "Node Exporter Full dashboard installed → $DASH_FILE"
+# Map of dashboard ID → filename.
+# All dashboards are from grafana.com and will be auto-loaded via the
+# dashboard provisioning provider installed in step 11.
+# Dashboards that already exist on disk are never re-downloaded.
+declare -A DASHBOARDS
+DASHBOARDS=(
+    ["1860"]="node-exporter-full.json"         # Node Exporter Full (host metrics)
+    ["10347"]="proxmox-ve.json"                 # Proxmox VE (VMs, containers, storage)
+    ["12553"]="pfsense-netflow.json"            # pfSense / OPNsense (WAN/LAN traffic)
+    ["8919"]="network-interfaces.json"          # Network Interface Overview (switches)
+    ["7362"]="mysql-overview.json"              # MySQL / MariaDB Overview
+    ["9628"]="postgresql-overview.json"         # PostgreSQL Overview
+    ["763"]="redis-dashboard.json"              # Redis
+    ["13230"]="ssl-certificate-expiry.json"     # SSL Certificate Expiry tracker
+    ["7587"]="blackbox-exporter.json"           # Blackbox Exporter (HTTP probes)
+)
+
+for DASH_ID in "${!DASHBOARDS[@]}"; do
+    DASH_FILE="$DASH_DIR/${DASHBOARDS[$DASH_ID]}"
+    if [[ ! -f "$DASH_FILE" ]]; then
+        log info "downloading dashboard ID $DASH_ID (${DASHBOARDS[$DASH_ID]})"
+        if curl -fsSL --retry 2 --connect-timeout 15 \
+            "https://grafana.com/api/dashboards/${DASH_ID}/revisions/latest/download" \
+            -o "$DASH_FILE"; then
+            chown grafana:grafana "$DASH_FILE" 2>/dev/null || true
+            log info "dashboard $DASH_ID installed → $DASH_FILE"
+        else
+            log warn "dashboard $DASH_ID download failed (offline?) — import manually from grafana.com ID $DASH_ID"
+            rm -f "$DASH_FILE"
+        fi
     else
-        log warn "dashboard download failed (offline?) — import manually from grafana.com ID 1860"
-        rm -f "$DASH_FILE"
+        log info "dashboard ${DASHBOARDS[$DASH_ID]} already present"
     fi
-else
-    log info "Node Exporter Full dashboard already present"
-fi
+done
 
 # --- 13. Enable and start the apt-provided service -------------------------
 if systemctl is-enabled --quiet "grafana-server" 2>/dev/null; then

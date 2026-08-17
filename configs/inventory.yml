@@ -1,0 +1,205 @@
+# inventory.yml — what to monitor (P7 onboarding)
+#
+# CONTRACT: flat sections only — parsed by scripts/apply-inventory.sh.
+# This file is version-controlled. NEVER put secrets here.
+# Credentials (MySQL DSN, SNMP community) go in environment.local.yml.
+#
+# HOW TO USE:
+#   1. Fill in your real IPs/URLs below (replace every 10.x.x.x and example.com)
+#   2. Run: sudo ./scripts/apply-inventory.sh
+#   3. Verify: ./monitorctl health  →  all PASS
+#
+# apply-inventory.sh will:
+#   - Patch /etc/prometheus/prometheus.yml with all targets
+#   - Hot-reload Prometheus (no restart, no data loss)
+#   - Print which targets were added
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 1 — Linux Servers (node_exporter)
+#
+# These are any Linux servers running node_exporter (CPU, RAM, disk, network).
+# Includes: Proxmox hosts, Ubuntu app servers, database servers, etc.
+#
+# HOW TO ONBOARD A NEW LINUX SERVER:
+#   Run on the target server:
+#     curl -fsSL https://raw.githubusercontent.com/TheMalikFaheem/data-center-monitoring-system/main/scripts/agent-bootstrap.sh \
+#         | sudo bash
+#   Then add its IP here and run apply-inventory.sh.
+#
+# FIELDS:
+#   ip      — LAN IP of the server (must be reachable from monitor01)
+#   alias   — friendly name shown in Grafana and alerts
+#   role    — label for grouping in dashboards (hypervisor | app | db | web | storage)
+# ─────────────────────────────────────────────────────────────────────────────
+nodes:
+  # ── Proxmox Hypervisors ────────────────────────────────────────────────────
+  # CHANGE: Replace with your Proxmox host LAN IPs
+  - ip: 10.0.0.10
+    alias: proxmox01
+    role: hypervisor
+
+  - ip: 10.0.0.11
+    alias: proxmox02
+    role: hypervisor
+
+  # ── Application / Database Servers ────────────────────────────────────────
+  # CHANGE: Replace with your Linux server IPs and names
+  - ip: 10.0.0.20
+    alias: app01
+    role: app
+
+  - ip: 10.0.0.21
+    alias: db01
+    role: db
+
+  # Add more servers here using the same format:
+  # - ip: 10.0.0.XX
+  #   alias: your-server-name
+  #   role: app
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 2 — SNMP Devices (switches, router, pfSense, iDRAC)
+#
+# These devices are polled via SNMP from monitor01 — no agent needed on the device.
+# You only need to enable SNMP on the device itself (community string: public).
+#
+# HOW TO ENABLE SNMP:
+#   pfSense:  Services → SNMP → enable, community = public, bind interface = LAN
+#   Cisco:    snmp-server community public RO
+#   HP/Aruba: snmp-server community public
+#   iDRAC:    iDRAC Settings → Connectivity → SNMP → enable, community = public
+#   Proxmox:  Datacenter → SNMP (built-in), community = public
+#
+# MODULES (what data to collect):
+#   if_mib    — interface traffic, errors, link state (works on almost all devices)
+#   cisco     — Cisco-specific metrics
+#   mikrotik  — MikroTik RouterOS metrics
+#   idrac     — Dell iDRAC hardware health (temps, fans, PSU, RAID)
+#   apc_ups   — APC UPS battery health and load
+#
+# SNMP community string is set in configs/environment.local.yml:
+#   snmp_community: "public"   ← change if your devices use a different string
+# ─────────────────────────────────────────────────────────────────────────────
+snmp_devices:
+  # ── pfSense / OPNsense Firewall ───────────────────────────────────────────
+  # CHANGE: Replace with your pfSense LAN IP
+  - ip: 10.0.0.1
+    alias: pfsense
+    module: if_mib
+
+  # ── Core Switch ───────────────────────────────────────────────────────────
+  # CHANGE: Replace with your switch management IP
+  - ip: 10.0.0.2
+    alias: core-switch-01
+    module: if_mib
+
+  # ── Additional Switches ───────────────────────────────────────────────────
+  # CHANGE: Add your other switch IPs
+  - ip: 10.0.0.3
+    alias: access-switch-01
+    module: if_mib
+
+  # ── Dell iDRAC (hardware health: temps, fans, PSU, RAID) ─────────────────
+  # CHANGE: Replace with your iDRAC management IP (not the server LAN IP)
+  # NOTE: iDRAC IP is typically configured separately on the management port
+  - ip: 10.0.0.100
+    alias: idrac-server01
+    module: idrac
+
+  - ip: 10.0.0.101
+    alias: idrac-server02
+    module: idrac
+
+  # Add more SNMP devices here:
+  # - ip: 10.0.0.XX
+  #   alias: device-name
+  #   module: if_mib   # or: cisco, mikrotik, idrac, apc_ups
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 3 — Websites & HTTPS Endpoints (blackbox HTTP probes)
+#
+# Monitors: HTTP response code, response time, and SSL certificate expiry.
+# monitor01 makes real HTTP requests to these URLs every 15 seconds.
+# You will get alerts when: site is down, slow (>5s), or SSL cert expires in 30 days.
+#
+# HOW TO ADD: Just put the full URL. HTTPS = SSL is also checked.
+# ─────────────────────────────────────────────────────────────────────────────
+websites:
+  # CHANGE: Replace with your actual websites and app URLs
+  - url: https://yourdomain.com
+    alias: main-website
+
+  - url: https://yourapp.com
+    alias: web-app
+
+  - url: https://yourapp.com/health
+    alias: web-app-health
+
+  # Add more URLs here:
+  # - url: https://another-site.com
+  #   alias: another-site
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 4 — TCP Port Probes (connectivity checks)
+#
+# Verifies that a TCP port is open and accepting connections.
+# Use for: database ports, SSH, custom app ports.
+# Does NOT check login credentials — just that the port is reachable.
+# ─────────────────────────────────────────────────────────────────────────────
+tcp_probes:
+  # ── Database Ports ────────────────────────────────────────────────────────
+  # CHANGE: Replace with your database server IPs
+  - host: 10.0.0.20:3306
+    alias: mysql-prod
+
+  - host: 10.0.0.21:5432
+    alias: postgres-prod
+
+  - host: 10.0.0.20:6379
+    alias: redis-prod
+
+  # ── Other Services ────────────────────────────────────────────────────────
+  # Add any other ports you want to verify are reachable:
+  # - host: 10.0.0.XX:22
+  #   alias: ssh-server01
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 5 — Database Exporters (deep metrics)
+#
+# These give DEEP database metrics beyond just "port is open":
+# MySQL:      queries/sec, connections, slow queries, replication lag
+# PostgreSQL: cache hit ratio, dead locks, table bloat, connections
+# Redis:      memory, evictions, commands/sec, key count
+#
+# CREDENTIALS must go in configs/environment.local.yml (never here):
+#   mysql_dsn:    "exporter:PASSWORD@tcp(10.0.0.20:3306)/"
+#   postgres_dsn: "postgresql://exporter:PASSWORD@10.0.0.21:5432/postgres?sslmode=disable"
+#   redis_addr:   "redis://10.0.0.20:6379"
+#
+# Run the database exporter installers after adding credentials:
+#   sudo ./monitorctl install mysqld_exporter
+#   sudo ./monitorctl install postgres_exporter
+#   sudo ./monitorctl install redis_exporter
+# ─────────────────────────────────────────────────────────────────────────────
+databases:
+  mysql:
+    enabled: true
+    # CHANGE: Replace with your MySQL server IP
+    host: 10.0.0.20
+    alias: mysql-prod
+
+  postgresql:
+    enabled: true
+    # CHANGE: Replace with your PostgreSQL server IP
+    host: 10.0.0.21
+    alias: postgres-prod
+
+  redis:
+    enabled: true
+    # CHANGE: Replace with your Redis server IP
+    host: 10.0.0.20
+    alias: redis-prod

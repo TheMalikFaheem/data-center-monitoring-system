@@ -1,0 +1,128 @@
+# network.rules.yml — Prometheus alerting rules for network devices.
+#
+# Covers: SNMP-polled devices (switches, pfSense, iDRAC) and ICMP reachability.
+# Installed to /etc/prometheus/rules/network.rules.yml by install-alertmanager.sh.
+# Requires: snmp_exporter installed and devices configured in inventory.yml.
+#
+# Validate:  promtool check rules /etc/prometheus/rules/network.rules.yml
+# Reload:    systemctl reload prometheus
+
+groups:
+  - name: snmp_device_availability
+    rules:
+      # SNMP device completely unreachable (switch, pfSense, iDRAC)
+      - alert: SNMPTargetDown
+        expr: up{job="snmp"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Network device unreachable: {{ $labels.instance }}"
+          description: >
+            SNMP polling of {{ $labels.instance }} has been failing for
+            more than 5 minutes. The device may be powered off, unreachable,
+            or SNMP has been disabled. Check physical connectivity and SNMP config.
+
+      # ICMP ping failing (host unreachable at network level)
+      - alert: HostUnreachable
+        expr: probe_success{job="blackbox_icmp"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Host unreachable (ICMP): {{ $labels.instance }}"
+          description: >
+            ICMP ping to {{ $labels.instance }} has been failing for 5 minutes.
+            The host may be down, the network path broken, or ICMP is blocked.
+
+  - name: network_interfaces
+    rules:
+      # Switch/router interface operationally down
+      # ifOperStatus: 1=up, 2=down, 3=testing
+      - alert: InterfaceDown
+        expr: >
+          ifOperStatus{ifOperStatus!="1", job="snmp",
+            ifDescr!~".*loopback.*|.*Loopback.*|.*lo.*"}
+          == 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Interface down: {{ $labels.instance }}/{{ $labels.ifDescr }}"
+          description: >
+            Interface {{ $labels.ifDescr }} on {{ $labels.instance }} is
+            operationally DOWN. Check the cable, SFP, or connected device.
+            Note: ignore expected down ports (unused switch ports).
+
+      # High interface error rate (sustained packet errors — bad cable or duplex mismatch)
+      - alert: HighInterfaceErrors
+        expr: >
+          rate(ifInErrors[5m]) + rate(ifOutErrors[5m]) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Interface errors: {{ $labels.instance }}/{{ $labels.ifDescr }}"
+          description: >
+            Interface {{ $labels.ifDescr }} on {{ $labels.instance }} is
+            seeing {{ $value | printf "%.1f" }} errors/sec for 10 minutes.
+            Common causes: bad cable, duplex mismatch, or failing SFP/NIC.
+
+      # Interface utilization > 80% for 10 minutes
+      - alert: HighInterfaceUtilization
+        expr: >
+          (
+            rate(ifHCInOctets[5m]) + rate(ifHCOutOctets[5m])
+          ) * 8 / ifHighSpeed / 1000000 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High interface utilization: {{ $labels.instance }}/{{ $labels.ifDescr }}"
+          description: >
+            Interface {{ $labels.ifDescr }} on {{ $labels.instance }} is at
+            {{ $value | printf "%.1f" }}% utilization for 10 minutes.
+            Consider capacity planning or traffic analysis.
+
+  - name: idrac_hardware
+    rules:
+      # Dell iDRAC: server power state not on
+      # iDRACPowerState: 1=other, 2=unknown, 3=on, 4=off, 11=powercycle
+      - alert: ServerPowerOff
+        expr: >
+          driveArrayControllerDiskDriveState{job="snmp", module="idrac"} != 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Server may be powered off: {{ $labels.instance }}"
+          description: >
+            iDRAC reports {{ $labels.instance }} is not in the ON power state.
+            Check physical power, iDRAC event log, and PDU.
+
+      # iDRAC: global system status not OK
+      # globalSystemStatus: 1=other, 2=unknown, 3=ok, 4=nonCritical, 5=critical, 6=nonRecoverable
+      - alert: ServerHardwareWarning
+        expr: >
+          globalSystemStatus{job="snmp", module="idrac"} == 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hardware warning on: {{ $labels.instance }}"
+          description: >
+            iDRAC reports a non-critical hardware warning on {{ $labels.instance }}.
+            Check iDRAC web console → System Overview for details (fans, temps, PSU).
+
+      - alert: ServerHardwareCritical
+        expr: >
+          globalSystemStatus{job="snmp", module="idrac"} >= 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL hardware fault on: {{ $labels.instance }}"
+          description: >
+            iDRAC reports a critical/non-recoverable hardware fault on
+            {{ $labels.instance }}. Log in to iDRAC immediately to identify
+            the failing component (PSU, RAID, memory, temperature).

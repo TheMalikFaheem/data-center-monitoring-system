@@ -44,8 +44,6 @@ LISTEN=$(get_env alertmanager_listen "127.0.0.1:9093")
 _wire_prometheus_alertmanager() {
     local prom_config="/etc/prometheus/prometheus.yml"
     local rules_dir="/etc/prometheus/rules"
-    local rules_src="$TEMPLATE_DIR/rules/host.rules.yml"
-    local rules_dest="$rules_dir/host.rules.yml"
 
     # ── Install alert rules ───────────────────────────────────────────────
     if [[ ! -d "$rules_dir" ]]; then
@@ -54,12 +52,18 @@ _wire_prometheus_alertmanager() {
         chmod 750 "$rules_dir"
         log info "created $rules_dir"
     fi
-    if [[ ! -f "$rules_dest" ]] || ! cmp -s "$rules_src" "$rules_dest"; then
-        install -m 0640 -o root -g prometheus "$rules_src" "$rules_dest"
-        log info "installed host alert rules → $rules_dest"
-    else
-        log info "host alert rules unchanged"
-    fi
+
+    # Install all rule files from templates/rules/
+    for rules_src in "$TEMPLATE_DIR"/rules/*.yml; do
+        [[ -e "$rules_src" ]] || continue
+        local rules_dest="$rules_dir/$(basename "$rules_src")"
+        if [[ ! -f "$rules_dest" ]] || ! cmp -s "$rules_src" "$rules_dest"; then
+            install -m 0640 -o root -g prometheus "$rules_src" "$rules_dest"
+            log info "installed alert rules → $rules_dest"
+        else
+            log info "$(basename "$rules_src") unchanged"
+        fi
+    done
 
     # ── Patch prometheus.yml ──────────────────────────────────────────────
     if [[ ! -f "$prom_config" ]]; then
@@ -166,7 +170,9 @@ render_template "$TEMPLATE_DIR/alertmanager.yml.tpl" "$TMP_CFG" \
     "SMTP_FROM=$(get_env smtp_from "alertmanager@example.com")" \
     "SMTP_AUTH_USER=$(get_env smtp_auth_username "alertmanager@example.com")" \
     "SMTP_AUTH_PASSWORD=$(get_env smtp_auth_password "changeme")" \
-    "ALERT_EMAIL_TO=$(get_env alert_email_to "admin@example.com")"
+    "ALERT_EMAIL_TO=$(get_env alert_email_to "admin@example.com")" \
+    "TELEGRAM_BOT_TOKEN=$(get_env telegram_bot_token "")" \
+    "TELEGRAM_CHAT_ID=$(get_env telegram_chat_id "0")"
 
 if [[ ! -f "$CONFIG" ]]; then
     install -m 0640 -o root -g alertmanager "$TMP_CFG" "$CONFIG"
