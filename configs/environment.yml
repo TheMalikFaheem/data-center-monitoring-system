@@ -6,9 +6,34 @@
 # gitignored. Any key there overrides the value here. NEVER put server-specific
 # values in this file; it must stay valid for a fresh Ubuntu 24.04 box.
 
-# Where each service listens. 127.0.0.1 = loopback only: nothing is reachable
-# from the network until the nginx reverse proxy phase. On a future on-prem
-# host, override node_exporter_listen in environment.local.yml with a LAN bind.
+# ─────────────────────────────────────────────────────────────────────────────
+# THE ONE VALUE YOU MUST CHANGE WHEN MOVING TO A NEW SERVER
+# ─────────────────────────────────────────────────────────────────────────────
+# This is the IP address of the machine running the monitoring stack.
+# It is used in:
+#   - SSH tunnel instructions printed after install
+#   - agent-bootstrap.sh Loki push URL
+#   - apply-inventory.sh summary messages
+#   - All "how to access" help text throughout the codebase
+#
+# Override this in configs/environment.local.yml with your real server IP:
+#   monitor_server_ip: "192.168.1.50"    ← your local LAN IP
+#   monitor_server_ip: "10.0.0.5"        ← or whatever your network uses
+#
+# The default below is a placeholder. Scripts will still work; only the
+# printed SSH tunnel hint will show the wrong IP until you override it.
+monitor_server_ip: "YOUR_MONITOR_SERVER_IP"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Service listen addresses.
+# 127.0.0.1 = loopback only — nothing reachable from the network.
+# Access is via SSH tunnel from your workstation:
+#   ssh -L 9090:127.0.0.1:9090 root@<monitor_server_ip>
+#   ssh -L 3000:127.0.0.1:3000 root@<monitor_server_ip>
+# This is the correct setup for both LAN and internet deployments.
+# Only override these if you specifically need LAN-direct access
+# (e.g., nginx in front for a team dashboard — see Phase 5 notes below).
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 1 — Core
 prometheus_listen: "127.0.0.1:9090"
 node_exporter_listen: "127.0.0.1:9100"
@@ -61,12 +86,20 @@ redis_exporter_listen:    "127.0.0.1:9121"
 # How many backup archives to keep before rotating old ones.
 backup_keep: "7"
 
-# Phase 5 — Edge (nginx + HTTPS)
-# REQUIRED in environment.local.yml before running install-nginx.sh:
-# nginx_domain:           "monitor01.example.com"   # DNS A record → this server
-# nginx_admin_user:       "admin"                    # basic auth username
-# nginx_admin_password:   "your-strong-password"     # basic auth password
-# nginx_certbot_email:    "you@example.com"           # optional, for cert expiry alerts
+# Phase 5 — Edge (nginx + HTTPS) — OPTIONAL for LAN deployments
+# ─────────────────────────────────────────────────────────────────────────────
+# nginx is OPTIONAL when running on a local LAN. You can access everything
+# via SSH tunnels without it. Only set these up if you want:
+#   a) A web URL like https://monitor.yourdomain.com accessible to the team
+#   b) HTTPS with a real SSL certificate
+#
+# For LAN only: you can skip nginx entirely. SSH tunnel is sufficient.
+# For public domain: set these in environment.local.yml:
+# nginx_domain:           "monitor.yourdomain.com"   # DNS A record → server IP
+# nginx_admin_user:       "admin"                     # basic auth username
+# nginx_admin_password:   "your-strong-password"      # basic auth password
+# nginx_certbot_email:    "you@example.com"            # optional, cert expiry alerts
+
 
 # Phase 6 — Watchdog
 # Alertmanager URL for the watchdog to POST alerts to.

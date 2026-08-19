@@ -14,7 +14,10 @@
 #
 #   # Metrics + logs (node_exporter + Alloy → central Loki):
 #   curl -fsSL https://raw.githubusercontent.com/TheMalikFaheem/data-center-monitoring-system/main/scripts/agent-bootstrap.sh \
-#       | sudo bash -s -- --with-alloy --loki-url "http://107.170.11.210:3100"
+#       | sudo bash -s -- --with-alloy --loki-url "http://YOUR_MONITOR_SERVER_IP:3100"
+#                                                           ↑
+#   Replace with your monitoring server IP (e.g. 192.168.1.50)
+#   Find it in: configs/environment.local.yml → monitor_server_ip
 #
 # THEN on monitor01, add the new server to Prometheus:
 #   sudo /opt/monitoring/scripts/add-agent-target.sh <new-server-ip>
@@ -195,7 +198,7 @@ if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q 'Status: activ
     ufw allow "${NE_PORT}/tcp" comment "node_exporter (Prometheus scrape)"
     info "UFW: port ${NE_PORT}/tcp opened"
 else
-    warn "UFW not active — ensure port ${NE_PORT} is reachable from monitor01 in your cloud firewall"
+    warn "UFW not active — ensure port ${NE_PORT} is reachable from your monitoring server"
 fi
 
 # ============================================================================

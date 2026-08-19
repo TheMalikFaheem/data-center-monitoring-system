@@ -118,4 +118,5 @@ verify_service_health "$COMPONENT" "$TARGET"
 
 finish_install
 log info "=== $COMPONENT $TARGET installed successfully ==="
-log info "UI (from your Mac): ssh -L 9090:127.0.0.1:9090 root@monitor01 → http://localhost:9090"
+MONITOR_IP=$(get_env monitor_server_ip "YOUR_MONITOR_SERVER_IP")
+log info "UI (from your workstation): ssh -L 9090:127.0.0.1:9090 root@${MONITOR_IP} → http://localhost:9090"

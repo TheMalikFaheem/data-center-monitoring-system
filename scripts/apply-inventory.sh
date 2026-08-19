@@ -318,7 +318,8 @@ if [[ $CHANGED -eq 1 ]]; then
     log info ""
     log info "=== apply-inventory complete ==="
     log info "New targets are being scraped. Check Prometheus → Status → Targets"
-    log info "SSH tunnel: ssh -L 9090:127.0.0.1:9090 root@107.170.11.210 → http://localhost:9090"
+    MONITOR_IP=$(get_env monitor_server_ip "YOUR_MONITOR_SERVER_IP")
+    log info "SSH tunnel: ssh -L 9090:127.0.0.1:9090 root@${MONITOR_IP} → http://localhost:9090"
 else
     log info "=== apply-inventory: no changes needed (all targets already registered) ==="
 fi
