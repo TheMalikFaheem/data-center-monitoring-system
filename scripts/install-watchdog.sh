@@ -25,7 +25,7 @@ setup_error_trap
 log info "=== monitoring watchdog installer starting ==="
 
 require_root
-require_ubuntu_2404
+require_supported_os
 require_commands curl
 
 # --- 1. Verify dependencies present ----------------------------------------

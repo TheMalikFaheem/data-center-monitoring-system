@@ -39,10 +39,10 @@ log info "=== $COMPONENT installer starting ==="
 
 # --- 1. Preflight ----------------------------------------------------------
 require_root
-require_ubuntu_2404
+require_supported_os
 require_commands curl gpg
 check_disk_space /var/lib 512
-check_ufw
+check_firewall
 
 # --- 2. Resolve versions and settings --------------------------------------
 TARGET=$(get_version "$COMPONENT")
@@ -63,13 +63,17 @@ Add this key (gitignored) before running this installer:
   echo 'grafana_admin_password: \"your_strong_password\"' >> configs/environment.local.yml"
 fi
 
-# --- 3. Grafana version detection (dpkg-aware) -----------------------------
-# The shared installed_version() function expects 'name, version X.Y.Z (...)'.
-# We install a thin wrapper at /usr/local/bin/grafana to provide that format.
+# --- 3. Grafana version detection (package-manager-aware) ------------------
+# The shared installed_version() expects 'name, version X.Y.Z (...)' format.
+# We install a thin wrapper at /usr/local/bin/grafana to normalise output.
 _grafana_installed_version() {
-    dpkg-query -W -f='${Version}' grafana 2>/dev/null \
-        | sed 's/[+~].*$//' \
-        || true
+    if [[ "${OS_FAMILY:-debian}" == "rhel" ]]; then
+        rpm -q --queryformat '%{VERSION}' grafana 2>/dev/null || true
+    else
+        dpkg-query -W -f='${Version}' grafana 2>/dev/null \
+            | sed 's/[+~].*$//' \
+            || true
+    fi
 }
 
 CURRENT=$(_grafana_installed_version)
@@ -112,7 +116,7 @@ if [[ -z "$CURRENT" ]]; then
     check_port_free "$GRAFANA_PORT"
 fi
 
-# --- 5. Add Grafana apt repository (idempotent — shared with Alloy) --------
+# --- 5. Add Grafana package repository (idempotent) ------------------------
 _add_grafana_apt_repo() {
     local keyring="/etc/apt/keyrings/grafana.gpg"
     local sources="/etc/apt/sources.list.d/grafana.list"
@@ -144,32 +148,76 @@ EOF
     fi
 }
 
-_add_grafana_apt_repo
+_add_grafana_dnf_repo() {
+    local repofile="/etc/yum.repos.d/grafana.repo"
+    if [[ ! -f "$repofile" ]]; then
+        log info "adding Grafana dnf repo"
+        cat > "$repofile" <<'EOF'
+[grafana]
+name=grafana
+baseurl=https://rpm.grafana.com
+repo_gpgcheck=1
+enabled=1
+gpgcheck=1
+gpgkey=https://rpm.grafana.com/gpg.key
+sslverify=1
+sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+exclude=*beta*
+EOF
+        push_rollback "rm -f $repofile"
+        log info "Grafana dnf repo added → $repofile"
+    else
+        log info "Grafana dnf repo already present"
+    fi
+}
 
-# --- 6. Find exact apt version string for the pinned version ---------------
-# Note: 'awk ... exit' closes the pipe early causing SIGPIPE (exit 141) under
-# set -o pipefail. '|| true' suppresses the benign pipe error.
-APT_VER=$(apt-cache show grafana 2>/dev/null \
-    | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
-
-if [[ -z "$APT_VER" ]]; then
-    log warn "grafana $TARGET not found in apt cache — refreshing"
-    DEBIAN_FRONTEND=noninteractive \
-        apt-get -o DPkg::Lock::Timeout=300 update \
-        || log warn "apt update failed — trying with stale cache"
-    APT_VER=$(apt-cache show grafana 2>/dev/null \
-        | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
+if [[ "${OS_FAMILY:-debian}" == "rhel" ]]; then
+    _add_grafana_dnf_repo
+else
+    _add_grafana_apt_repo
 fi
 
-[[ -n "$APT_VER" ]] || die "grafana $TARGET not available in Grafana apt repo — check configs/versions.yml"
-log info "resolved grafana apt version: $APT_VER"
+# --- 6. Find exact package version string for the pinned version -----------
+if [[ "${OS_FAMILY:-debian}" == "rhel" ]]; then
+    # dnf: check if the pinned version is available
+    if ! dnf info grafana-"$TARGET" >/dev/null 2>&1; then
+        log warn "grafana $TARGET not found via dnf — refreshing repo cache"
+        dnf makecache --repo=grafana 2>/dev/null || log warn "dnf makecache failed — continuing"
+    fi
+    if ! dnf info grafana-"$TARGET" >/dev/null 2>&1; then
+        die "grafana $TARGET not available in Grafana dnf repo — check configs/versions.yml"
+    fi
+    log info "grafana $TARGET available via dnf"
 
-# --- 7. Install via apt ----------------------------------------------------
-log info "installing grafana=$APT_VER via apt"
-DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-    apt-get -o DPkg::Lock::Timeout=300 install -y "grafana=$APT_VER" \
-    || die "apt-get install grafana=$APT_VER failed"
-log info "grafana $APT_VER installed via apt"
+    # --- 7. Install via dnf ------------------------------------------------
+    log info "installing grafana-$TARGET via dnf"
+    dnf install -y "grafana-$TARGET" \
+        || die "dnf install grafana-$TARGET failed"
+    log info "grafana $TARGET installed via dnf"
+else
+    # apt path (original logic)
+    APT_VER=$(apt-cache show grafana 2>/dev/null \
+        | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
+
+    if [[ -z "$APT_VER" ]]; then
+        log warn "grafana $TARGET not found in apt cache — refreshing"
+        DEBIAN_FRONTEND=noninteractive \
+            apt-get -o DPkg::Lock::Timeout=300 update \
+            || log warn "apt update failed — trying with stale cache"
+        APT_VER=$(apt-cache show grafana 2>/dev/null \
+            | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
+    fi
+
+    [[ -n "$APT_VER" ]] || die "grafana $TARGET not available in Grafana apt repo — check configs/versions.yml"
+    log info "resolved grafana apt version: $APT_VER"
+
+    # --- 7. Install via apt ------------------------------------------------
+    log info "installing grafana=$APT_VER via apt"
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+        apt-get -o DPkg::Lock::Timeout=300 install -y "grafana=$APT_VER" \
+        || die "apt-get install grafana=$APT_VER failed"
+    log info "grafana $APT_VER installed via apt"
+fi
 
 # --- 8. Install version wrapper -------------------------------------------
 # Makes installed_version("grafana") and healthcheck.sh work correctly by

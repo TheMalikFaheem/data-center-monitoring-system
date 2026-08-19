@@ -53,7 +53,7 @@ log info "=== nginx reverse proxy installer starting ==="
 
 # --- 1. Preflight -----------------------------------------------------------
 require_root
-require_ubuntu_2404
+require_supported_os
 require_commands apt-get
 
 # --- 2. Read required settings ----------------------------------------------

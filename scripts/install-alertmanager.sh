@@ -25,13 +25,13 @@ log info "=== $COMPONENT installer starting ==="
 
 # --- 1. Preflight ----------------------------------------------------------
 require_root
-require_ubuntu_2404
+require_supported_os
 require_commands curl tar sha256sum promtool
 # amtool is NOT a separate apt package — it ships inside the alertmanager
 # tarball and is installed by install_binary() at step 7 below.
 check_disk_space /var/lib 512
 check_time_sync
-check_ufw
+check_firewall
 
 # --- 2. Resolve versions and settings --------------------------------------
 TARGET=$(get_version "$COMPONENT")

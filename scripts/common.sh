@@ -155,29 +155,71 @@ require_root() {
     fi
 }
 
-require_ubuntu_2404() {
-    if [[ "${FORCE_OS:-0}" == "1" ]]; then
-        log warn "FORCE_OS=1 set — skipping OS check"
-        return 0
-    fi
+# ---------------------------------------------------------------------------
+# OS detection — sets OS_FAMILY (debian | rhel) and PKG_MANAGER (apt-get | dnf)
+# Called once by require_supported_os; exported so Grafana/Alloy installers
+# can branch on OS_FAMILY without re-detecting.
+# ---------------------------------------------------------------------------
+_detect_os() {
     if [[ ! -r /etc/os-release ]]; then
-        die "/etc/os-release not found — is this even Linux?"
+        die "/etc/os-release not found — is this Linux?"
     fi
-    local id version arch
-    id=$(. /etc/os-release && echo "$ID")
-    version=$(. /etc/os-release && echo "$VERSION_ID")
-    if [[ "$id" != "ubuntu" || "$version" != "24.04" ]]; then
-        die "this framework targets Ubuntu 24.04 (found: $id $version) — set FORCE_OS=1 to override"
-    fi
-    arch=$(dpkg --print-architecture)
-    if [[ "$arch" != "amd64" ]]; then
-        die "this framework downloads linux-amd64 binaries (found arch: $arch)"
-    fi
+    local id version_id
+    id=$(. /etc/os-release && echo "${ID:-}")
+    version_id=$(. /etc/os-release && echo "${VERSION_ID:-}")
+
+    case "$id" in
+        ubuntu)
+            if [[ "$version_id" != "24.04" ]]; then
+                log warn "Ubuntu $version_id detected — framework targets 24.04, YMMV"
+            fi
+            OS_FAMILY="debian"
+            PKG_MANAGER="apt-get"
+            ;;
+        almalinux|rocky|rhel|centos)
+            case "$version_id" in
+                9*|10*) ;;
+                *) log warn "$id $version_id detected — framework targets 9/10, YMMV" ;;
+            esac
+            OS_FAMILY="rhel"
+            PKG_MANAGER="dnf"
+            ;;
+        *)
+            die "unsupported OS: $id $version_id\n  Supported: Ubuntu 24.04, AlmaLinux/Rocky/RHEL 9 or 10\n  Set FORCE_OS=1 to skip this check"
+            ;;
+    esac
+    export OS_FAMILY PKG_MANAGER
+    log info "detected OS: $id $version_id (family: $OS_FAMILY, pkg: $PKG_MANAGER)"
 }
 
-# require_commands <cmd...> — installs missing ones via apt. The command name
-# is used as the package name, which holds for everything we need (curl, tar,
-# unzip); base tools like sha256sum missing would mean a broken system anyway.
+# require_supported_os — replaces the old require_ubuntu_2404.
+# Detects OS family, validates architecture, sets OS_FAMILY + PKG_MANAGER.
+require_supported_os() {
+    if [[ "${FORCE_OS:-0}" == "1" ]]; then
+        log warn "FORCE_OS=1 set — skipping OS check, assuming rhel family"
+        OS_FAMILY="${OS_FAMILY:-rhel}"
+        PKG_MANAGER="${PKG_MANAGER:-dnf}"
+        export OS_FAMILY PKG_MANAGER
+        return 0
+    fi
+    _detect_os
+
+    # Validate architecture — all binary downloads are linux-amd64.
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) ;;
+        *) die "this framework downloads linux-amd64 binaries (found arch: $arch). ARM builds are not yet supported." ;;
+    esac
+}
+
+# Keep the old name as an alias so any external scripts that call it still work.
+require_ubuntu_2404() { require_supported_os; }
+
+# require_commands <cmd...> — installs missing commands via the OS package manager.
+# On Debian/Ubuntu: apt-get. On RHEL/AlmaLinux: dnf.
+# The command name is used as the package name which holds for curl, tar, gpg,
+# unzip — everything this framework actually needs.
 require_commands() {
     local missing=() cmd
     for cmd in "$@"; do
@@ -188,18 +230,30 @@ require_commands() {
     if (( ${#missing[@]} == 0 )); then
         return 0
     fi
-    log warn "missing commands: ${missing[*]} — installing via apt"
-    # Lists on fresh cloud images can be weeks stale; superseded .debs 404.
-    # Best-effort refresh (warn, don't die): the install below is the real gate.
-    DEBIAN_FRONTEND=noninteractive \
-        apt-get -o DPkg::Lock::Timeout=300 update \
-        || log warn "apt-get update failed — trying install with existing package lists"
-    # DPkg::Lock::Timeout: fresh droplets often run unattended-upgrades at
-    # boot; wait for the lock instead of failing. NEEDRESTART_MODE=a stops
-    # Ubuntu 24.04's interactive "restart services?" dialog.
-    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-        apt-get -o DPkg::Lock::Timeout=300 install -y "${missing[@]}" \
-        || die "failed to apt-install: ${missing[*]}"
+    log warn "missing commands: ${missing[*]} — installing via ${PKG_MANAGER:-auto}"
+
+    # OS_FAMILY may not be set yet if called before require_supported_os.
+    # Fall back to auto-detection.
+    local family="${OS_FAMILY:-}"
+    if [[ -z "$family" ]]; then
+        if command -v apt-get >/dev/null 2>&1; then family="debian";
+        elif command -v dnf >/dev/null 2>&1; then family="rhel";
+        else die "cannot determine package manager (no apt-get or dnf found)"; fi
+    fi
+
+    if [[ "$family" == "debian" ]]; then
+        # Lists on fresh images can be stale; best-effort refresh.
+        DEBIAN_FRONTEND=noninteractive \
+            apt-get -o DPkg::Lock::Timeout=300 update \
+            || log warn "apt-get update failed — trying with existing package lists"
+        DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            apt-get -o DPkg::Lock::Timeout=300 install -y "${missing[@]}" \
+            || die "failed to apt-install: ${missing[*]}"
+    else
+        # dnf is idempotent and doesn't need a separate refresh step.
+        dnf install -y "${missing[@]}" \
+            || die "failed to dnf-install: ${missing[*]}"
+    fi
 }
 
 # check_port_free <port> — die if something already listens there, naming the
@@ -231,9 +285,30 @@ check_time_sync() {
     fi
 }
 
-# Report UFW state. We never enable UFW from a script: enabling a firewall
-# over SSH without an OpenSSH allow rule locks you out. See docs/runbook.md.
-check_ufw() {
+# check_firewall — reports firewall state. Never enables it automatically
+# (enabling a firewall over SSH without an SSH allow rule locks you out).
+# On Debian/Ubuntu: checks ufw.
+# On RHEL/AlmaLinux: checks firewalld.
+check_firewall() {
+    local family="${OS_FAMILY:-}"
+    if [[ -z "$family" ]]; then
+        if command -v ufw >/dev/null 2>&1; then family="debian";
+        elif command -v firewall-cmd >/dev/null 2>&1; then family="rhel";
+        fi
+    fi
+
+    if [[ "$family" == "rhel" ]]; then
+        if ! command -v firewall-cmd >/dev/null 2>&1; then
+            log warn "firewalld not installed — services bind 127.0.0.1, but install firewalld for defence-in-depth"
+            return 0
+        fi
+        if ! firewall-cmd --state >/dev/null 2>&1; then
+            log warn "firewalld is not running — start with: systemctl enable --now firewalld"
+        fi
+        return 0
+    fi
+
+    # Debian / Ubuntu path
     if ! command -v ufw >/dev/null 2>&1; then
         log warn "ufw not installed — services bind 127.0.0.1, but install ufw as a backstop"
         return 0
@@ -244,6 +319,9 @@ check_ufw() {
         log warn "ufw is inactive — enable it manually after 'ufw allow OpenSSH' (see docs/runbook.md)"
     fi
 }
+
+# Keep old name as alias for backward compatibility.
+check_ufw() { check_firewall; }
 
 # ---------------------------------------------------------------------------
 # Config parsing and templating

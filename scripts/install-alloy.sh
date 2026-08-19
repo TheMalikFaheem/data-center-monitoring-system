@@ -37,10 +37,10 @@ log info "=== $COMPONENT installer starting ==="
 
 # --- 1. Preflight ----------------------------------------------------------
 require_root
-require_ubuntu_2404
+require_supported_os
 require_commands curl gpg
 check_disk_space /var/lib 256
-check_ufw
+check_firewall
 
 # --- 2. Resolve versions and settings --------------------------------------
 TARGET=$(get_version "$COMPONENT")
@@ -97,40 +97,70 @@ EOF
     fi
 }
 
-_add_grafana_apt_repo
+_add_grafana_dnf_repo() {
+    local repofile="/etc/yum.repos.d/grafana.repo"
+    if [[ ! -f "$repofile" ]]; then
+        log info "adding Grafana dnf repo (covers Alloy + Grafana)"
+        cat > "$repofile" <<'EOF'
+[grafana]
+name=grafana
+baseurl=https://rpm.grafana.com
+repo_gpgcheck=1
+enabled=1
+gpgcheck=1
+gpgkey=https://rpm.grafana.com/gpg.key
+sslverify=1
+sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+exclude=*beta*
+EOF
+        push_rollback "rm -f $repofile"
+        log info "Grafana dnf repo added → $repofile"
+    else
+        log info "Grafana dnf repo already present"
+    fi
+}
 
-# --- 5. Find exact apt version string for the pinned version ---------------
-# apt version strings may have a suffix (e.g. "1.11.1-1"). We look for an
-# apt version that starts with the pinned version and use it for pinned install.
-# Note: 'awk ... exit' closes the pipe early — SIGPIPE under set -o pipefail.
-# '|| true' suppresses the benign pipe exit.
-APT_VER=$(apt-cache show alloy 2>/dev/null \
-    | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
+# --- 4. Add repo and install ------------------------------------------------
+if [[ "${OS_FAMILY:-debian}" == "rhel" ]]; then
+    _add_grafana_dnf_repo
 
-if [[ -z "$APT_VER" ]]; then
-    # Refresh and retry once — the cache may predate the repo addition.
-    log warn "alloy $TARGET not found in apt cache — refreshing"
-    DEBIAN_FRONTEND=noninteractive \
-        apt-get -o DPkg::Lock::Timeout=300 update \
-        || log warn "apt update failed — trying with stale cache"
+    # Check version is available
+    if ! dnf info alloy-"$TARGET" >/dev/null 2>&1; then
+        log warn "alloy $TARGET not found via dnf — refreshing"
+        dnf makecache --repo=grafana 2>/dev/null || log warn "dnf makecache failed"
+    fi
+    [[ $(dnf info alloy-"$TARGET" 2>/dev/null | grep -c Version) -gt 0 ]] \
+        || die "alloy $TARGET not available in Grafana dnf repo — check configs/versions.yml"
+
+    log info "installing alloy-$TARGET via dnf"
+    dnf install -y "alloy-$TARGET" \
+        || die "dnf install alloy-$TARGET failed"
+    log info "alloy $TARGET installed via dnf"
+else
+    _add_grafana_apt_repo
+
+    # --- 5. Find exact apt version string ------------------------------------
     APT_VER=$(apt-cache show alloy 2>/dev/null \
         | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
+
+    if [[ -z "$APT_VER" ]]; then
+        log warn "alloy $TARGET not found in apt cache — refreshing"
+        DEBIAN_FRONTEND=noninteractive \
+            apt-get -o DPkg::Lock::Timeout=300 update \
+            || log warn "apt update failed — trying with stale cache"
+        APT_VER=$(apt-cache show alloy 2>/dev/null \
+            | awk -v v="$TARGET" '$1=="Version:" && $2 ~ "^"v {print $2; exit}') || true
+    fi
+
+    [[ -n "$APT_VER" ]] || die "alloy $TARGET not available in Grafana apt repo — check configs/versions.yml"
+    log info "resolved alloy apt version: $APT_VER"
+
+    log info "installing alloy=$APT_VER via apt"
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+        apt-get -o DPkg::Lock::Timeout=300 install -y "alloy=$APT_VER" \
+        || die "apt-get install alloy=$APT_VER failed"
+    log info "alloy $APT_VER installed via apt"
 fi
-
-if [[ -z "$APT_VER" ]]; then
-    die "alloy $TARGET not available in Grafana apt repo — check configs/versions.yml"
-fi
-log info "resolved alloy apt version: $APT_VER"
-
-# --- 6. Install via apt ----------------------------------------------------
-log info "installing alloy=$APT_VER via apt"
-DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-    apt-get -o DPkg::Lock::Timeout=300 install -y "alloy=$APT_VER" \
-    || die "apt-get install alloy=$APT_VER failed"
-
-# apt provides /usr/bin/alloy. The framework's installed_version() checks
-# /usr/local/bin/ first then falls back to PATH, so it will find /usr/bin/alloy.
-log info "alloy $APT_VER installed via apt"
 
 # --- 7. Render Alloy config ------------------------------------------------
 CONFIG="/etc/alloy/config.alloy"
