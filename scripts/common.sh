@@ -31,6 +31,11 @@ BIN_DIR="/usr/local/bin"
 LOG_DIR="/var/log/monitoring"
 LOG_FILE="$LOG_DIR/install.log"
 
+# Ensure /usr/local/bin is in PATH. Under `sudo` on RHEL/AlmaLinux the secure_path
+# often omits it, causing 'promtool: command not found' after we've just installed
+# the binary there. This is safe — it's the standard location for local binaries.
+export PATH="/usr/local/bin:$PATH"
+
 # ---------------------------------------------------------------------------
 # Health endpoints — one entry per component the framework knows about.
 # Always 127.0.0.1, never "localhost": localhost may resolve to ::1 while

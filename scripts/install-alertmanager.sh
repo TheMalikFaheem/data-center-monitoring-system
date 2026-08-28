@@ -26,7 +26,10 @@ log info "=== $COMPONENT installer starting ==="
 # --- 1. Preflight ----------------------------------------------------------
 require_root
 require_supported_os
-require_commands curl tar sha256sum promtool
+require_commands curl tar sha256sum
+# promtool is NOT a system package — it ships with Prometheus and is installed
+# at /usr/local/bin/promtool by install-prometheus.sh. common.sh adds
+# /usr/local/bin to PATH so it is always found after Prometheus is installed.
 # amtool is NOT a separate apt package — it ships inside the alertmanager
 # tarball and is installed by install_binary() at step 7 below.
 check_disk_space /var/lib 512
