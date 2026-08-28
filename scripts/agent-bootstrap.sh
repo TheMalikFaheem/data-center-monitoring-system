@@ -1,44 +1,52 @@
 #!/usr/bin/env bash
 #
-# agent-bootstrap.sh — standalone agent installer for on-prem servers.
+# agent-bootstrap.sh — full agent installer for on-prem/VM servers.
 #
-# Installs node_exporter (+ optionally Alloy for log shipping) on a target
-# server. Designed to work with `curl | bash` since it is self-contained
-# and does NOT source common.sh.
+# Installs monitoring agents on any target server. Self-contained,
+# works with `curl | bash`. Supports AlmaLinux, Rocky, RHEL, Ubuntu, Debian.
 #
-# USAGE (run on each server you want to monitor):
+# ══ USAGE ══════════════════════════════════════════════════════════════════════════
 #
-#   # Metrics only (node_exporter):
+#   FULL monitoring (recommended) — metrics + processes + logs:
 #   curl -fsSL https://raw.githubusercontent.com/TheMalikFaheem/data-center-monitoring-system/main/scripts/agent-bootstrap.sh \
-#       | sudo bash
+#       | sudo bash -s -- --full --loki-url="http://192.168.7.66:3100"
 #
-#   # Metrics + logs (node_exporter + Alloy → central Loki):
-#   curl -fsSL https://raw.githubusercontent.com/TheMalikFaheem/data-center-monitoring-system/main/scripts/agent-bootstrap.sh \
-#       | sudo bash -s -- --with-alloy --loki-url "http://YOUR_MONITOR_SERVER_IP:3100"
-#                                                           ↑
-#   Replace with your monitoring server IP (e.g. 192.168.1.50)
-#   Find it in: configs/environment.local.yml → monitor_server_ip
+#   Metrics only (node_exporter):
+#   curl -fsSL ...agent-bootstrap.sh | sudo bash
 #
-# THEN on monitor01, add the new server to Prometheus:
-#   sudo /opt/monitoring/scripts/add-agent-target.sh <new-server-ip>
+#   Metrics + logs (no process tracking):
+#   curl -fsSL ...agent-bootstrap.sh | sudo bash -s -- --with-alloy --loki-url="http://192.168.7.66:3100"
+#
+#   Metrics + processes + logs (same as --full):
+#   curl -fsSL ...agent-bootstrap.sh \
+#       | sudo bash -s -- --with-alloy --with-process-exporter --loki-url="http://192.168.7.66:3100"
+#
+# THEN on monitor01 (192.168.7.66), register this server:
+#   cd /opt/monitoring
+#   nano configs/inventory.yml    # add the server IP under linux_servers:
+#   sudo ./scripts/apply-inventory.sh
 #
 # VERSIONS — keep in sync with configs/versions.yml on monitor01:
 NODE_EXPORTER_VERSION="1.9.1"
+PROCESS_EXPORTER_VERSION="0.8.7"
 ALLOY_VERSION="1.18.1"
 
 set -euo pipefail
 
-# ── Defaults ────────────────────────────────────────────────────────────────
+# ── Defaults ──────────────────────────────────────────────────────────────────────────
 WITH_ALLOY=0
+WITH_PROCESS=0
 LOKI_URL=""
-NODE_LISTEN="0.0.0.0:9100"   # must be 0.0.0.0 so Prometheus can scrape it remotely
+NODE_LISTEN="0.0.0.0:9100"   # must be 0.0.0.0 so Prometheus can scrape remotely
 
 for arg in "$@"; do
     case "$arg" in
-        --with-alloy)    WITH_ALLOY=1 ;;
-        --loki-url=*)    LOKI_URL="${arg#--loki-url=}" ;;
-        --loki-url)      : ;;  # handled by next iteration (shift not available in for)
-        --listen=*)      NODE_LISTEN="${arg#--listen=}" ;;
+        --full)                  WITH_ALLOY=1; WITH_PROCESS=1 ;;
+        --with-alloy)            WITH_ALLOY=1 ;;
+        --with-process-exporter) WITH_PROCESS=1 ;;
+        --loki-url=*)            LOKI_URL="${arg#--loki-url=}" ;;
+        --loki-url)              : ;;
+        --listen=*)              NODE_LISTEN="${arg#--listen=}" ;;
     esac
 done
 
@@ -220,36 +228,106 @@ ALLOY_CFG
     info "=== Alloy installed — shipping logs → ${LOKI_URL} ==="
 fi
 
+# ============================================================================
+# 3. Install process_exporter (optional — monitors every running application)
+# ============================================================================
+if [[ $WITH_PROCESS -eq 1 ]]; then
+    info "=== installing process_exporter $PROCESS_EXPORTER_VERSION ==="
 
-# ============================================================================
-# 3. Firewall — open node_exporter port to Prometheus server
-# ============================================================================
-NE_PORT="${NODE_LISTEN##*:}"
-if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
-    firewall-cmd --permanent --add-port="${NE_PORT}/tcp"
-    firewall-cmd --reload
-    info "firewalld: port ${NE_PORT}/tcp opened permanently"
-elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q 'Status: active'; then
-    ufw allow "${NE_PORT}/tcp" comment "node_exporter (Prometheus scrape)"
-    info "UFW: port ${NE_PORT}/tcp opened"
-else
-    warn "No active firewall detected — ensure port ${NE_PORT} is reachable from your monitoring server (192.168.7.66)"
+    PE_BASE="https://github.com/ncabatoff/process-exporter/releases/download/v${PROCESS_EXPORTER_VERSION}"
+    PE_TARBALL="process-exporter-${PROCESS_EXPORTER_VERSION}.linux-amd64.tar.gz"
+    PE_TAR="$DOWNLOAD_DIR/$PE_TARBALL"
+
+    verify_download \
+        "$PE_BASE/$PE_TARBALL" \
+        "$PE_TAR" \
+        "$PE_BASE/sha256sums.txt"
+
+    EXTRACT=$(mktemp -d)
+    tar -xzf "$PE_TAR" -C "$EXTRACT" --strip-components=1
+    install -m 0755 -o root -g root "$EXTRACT/process-exporter" "$BIN_DIR/process_exporter"
+    rm -rf "$EXTRACT"
+    info "installed process_exporter → $BIN_DIR/process_exporter"
+
+    # Config: track every process by executable name.
+    # This gives you per-process CPU, RAM, threads, open files.
+    mkdir -p /etc/process_exporter
+    cat > /etc/process_exporter/process-exporter.yml << 'PECFG'
+# Monitor every process group by executable name.
+# Gives per-process CPU, RAM, threads, open file descriptors.
+process_names:
+  # Match all processes by their executable name (catch-all)
+  - name: "{{.Comm}}"
+    cmdline:
+      - '.+'
+PECFG
+
+    cat > /etc/systemd/system/process_exporter.service << PEUNIT
+[Unit]
+Description=Prometheus process_exporter — managed by monitoring-agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=$BIN_DIR/process_exporter \\
+    --config.path=/etc/process_exporter/process-exporter.yml \\
+    --web.listen-address=0.0.0.0:9256
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+PEUNIT
+
+    systemctl daemon-reload
+    systemctl enable --now process_exporter
+    sleep 2
+    systemctl is-active --quiet process_exporter \
+        || warn "process_exporter may not have started — check: journalctl -u process_exporter"
+    info "=== process_exporter installed: http://${SERVER_IP}:9256/metrics ==="
 fi
 
+# ============================================================================
+# 4. Firewall — open all agent ports
+# ============================================================================
+NE_PORT="${NODE_LISTEN##*:}"
+PORTS_TO_OPEN=("$NE_PORT")
+[[ $WITH_PROCESS -eq 1 ]] && PORTS_TO_OPEN+=("9256")
+
+for port in "${PORTS_TO_OPEN[@]}"; do
+    if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        firewall-cmd --permanent --add-port="${port}/tcp"
+        info "firewalld: port ${port}/tcp opened permanently"
+    elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q 'Status: active'; then
+        ufw allow "${port}/tcp" comment "monitoring agent"
+        info "UFW: port ${port}/tcp opened"
+    else
+        warn "No active firewall — ensure port ${port} is reachable from 192.168.7.66"
+    fi
+done
+command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null && firewall-cmd --reload
 
 # ============================================================================
 # Summary
 # ============================================================================
-cat <<SUMMARY
-
-╔═══════════════════════════════════════════════════════════════════╗
-║  Agent bootstrap complete                                         ║
-╠═══════════════════════════════════════════════════════════════════╣
-║  node_exporter: http://${SERVER_IP}:${NE_PORT}/metrics
-$([ $WITH_ALLOY -eq 1 ] && echo "║  Alloy → Loki:  $LOKI_URL")
-╠═══════════════════════════════════════════════════════════════════╣
-║  Next: on monitor01, add this server to Prometheus:               ║
-║    sudo /opt/monitoring/scripts/add-agent-target.sh ${SERVER_IP}
-╚═══════════════════════════════════════════════════════════════════╝
-
-SUMMARY
+SERVER_IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo "╔═══════════════════════════════════════════════════════════════════╗"
+echo "║  Agent bootstrap complete on ${SERVER_IP}"
+echo "╠═══════════════════════════════════════════════════════════════════╣"
+echo "║  Installed agents:"
+echo "║    node_exporter   → http://${SERVER_IP}:9100/metrics  (system metrics)"
+[[ $WITH_PROCESS -eq 1 ]] && echo "║    process_exporter → http://${SERVER_IP}:9256/metrics  (per-app metrics)"
+[[ $WITH_ALLOY    -eq 1 ]] && echo "║    alloy           → shipping logs to ${LOKI_URL}"
+echo "╠═══════════════════════════════════════════════════════════════════╣"
+echo "║  Next step — on your monitoring server (192.168.7.66):"
+echo "║    cd /opt/monitoring"
+echo "║    nano configs/inventory.yml   # add ${SERVER_IP} under linux_servers:"
+echo "║    sudo ./scripts/apply-inventory.sh"
+echo "╚═══════════════════════════════════════════════════════════════════╝"
+echo ""
