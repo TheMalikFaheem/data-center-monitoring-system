@@ -31,11 +31,21 @@ found=0
 printf '%-20s %-8s %-8s %s\n' "COMPONENT" "ACTIVE" "HTTP" "VERSION"
 
 for c in "${COMPONENTS[@]}"; do
-    [[ -f "/etc/systemd/system/$c.service" ]] || continue
+    # Resolve the real service name: grafana installs as grafana-server.service,
+    # not grafana.service. Alloy and other dnf packages put units in
+    # /usr/lib/systemd/system/ instead of /etc/systemd/system/.
+    svc="$c"
+    [[ "$c" == "grafana" ]] && svc="grafana-server"
+
+    # Check both systemd unit locations (framework-installed vs dnf-installed)
+    if [[ ! -f "/etc/systemd/system/${svc}.service" ]] && \
+       [[ ! -f "/usr/lib/systemd/system/${svc}.service" ]]; then
+        continue
+    fi
     found=1
 
     active="PASS"
-    systemctl is-active --quiet "$c" || { active="FAIL"; fail=1; }
+    systemctl is-active --quiet "$svc" || { active="FAIL"; fail=1; }
 
     http="PASS"
     url=${HEALTH_URL[$c]:-}
