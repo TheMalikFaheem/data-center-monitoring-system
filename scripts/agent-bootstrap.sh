@@ -145,17 +145,46 @@ if [[ $WITH_ALLOY -eq 1 ]]; then
     [[ -n "$LOKI_URL" ]] || die "--with-alloy requires --loki-url=http://<monitor01-ip>:3100"
     info "=== installing Alloy $ALLOY_VERSION ==="
 
-    # Add Grafana apt repo
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://apt.grafana.com/gpg.key \
-        | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
-        > /etc/apt/sources.list.d/grafana.list
-    apt-get update -q
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "alloy=${ALLOY_VERSION}-1" \
-        || DEBIAN_FRONTEND=noninteractive apt-get install -y alloy
+    # Detect OS family
+    OS_ID=$(. /etc/os-release && echo "${ID:-}")
+    case "$OS_ID" in
+        ubuntu|debian)
+            info "Debian/Ubuntu detected — installing Alloy via apt"
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://apt.grafana.com/gpg.key \
+                | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+            echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+                > /etc/apt/sources.list.d/grafana.list
+            apt-get update -q
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "alloy=${ALLOY_VERSION}-1" \
+                || DEBIAN_FRONTEND=noninteractive apt-get install -y alloy
+            ;;
+        almalinux|rocky|rhel|centos|fedora)
+            info "RHEL/AlmaLinux detected — installing Alloy via dnf"
+            if [[ ! -f /etc/yum.repos.d/grafana.repo ]]; then
+                cat > /etc/yum.repos.d/grafana.repo <<'REPO'
+[grafana]
+name=grafana
+baseurl=https://rpm.grafana.com
+repo_gpgcheck=1
+enabled=1
+gpgcheck=1
+gpgkey=https://rpm.grafana.com/gpg.key
+sslverify=1
+sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+exclude=*beta*
+REPO
+            fi
+            dnf install -y "alloy-${ALLOY_VERSION}" \
+                || dnf install -y alloy
+            ;;
+        *)
+            die "unsupported OS: $OS_ID — install Alloy manually and re-run without --with-alloy"
+            ;;
+    esac
 
-    # Write Alloy config — ships journald + syslog → Loki
+    # Write Alloy config — ships journald → Loki
+    mkdir -p /etc/alloy
     cat > /etc/alloy/config.alloy << ALLOY_CFG
 // Alloy agent config — managed by monitoring-agent bootstrap.
 // Ships journald logs to central Loki at ${LOKI_URL}.
@@ -184,22 +213,29 @@ loki.relabel "add_host" {
 }
 ALLOY_CFG
 
-    systemctl restart alloy
+    systemctl daemon-reload
+    systemctl enable --now alloy
     sleep 2
     systemctl is-active --quiet alloy || warn "alloy may not have started — check: journalctl -u alloy"
     info "=== Alloy installed — shipping logs → ${LOKI_URL} ==="
 fi
 
+
 # ============================================================================
-# 3. UFW — open node_exporter port to Prometheus server
+# 3. Firewall — open node_exporter port to Prometheus server
 # ============================================================================
 NE_PORT="${NODE_LISTEN##*:}"
-if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q 'Status: active'; then
+if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+    firewall-cmd --permanent --add-port="${NE_PORT}/tcp"
+    firewall-cmd --reload
+    info "firewalld: port ${NE_PORT}/tcp opened permanently"
+elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q 'Status: active'; then
     ufw allow "${NE_PORT}/tcp" comment "node_exporter (Prometheus scrape)"
     info "UFW: port ${NE_PORT}/tcp opened"
 else
-    warn "UFW not active — ensure port ${NE_PORT} is reachable from your monitoring server"
+    warn "No active firewall detected — ensure port ${NE_PORT} is reachable from your monitoring server (192.168.7.66)"
 fi
+
 
 # ============================================================================
 # Summary
