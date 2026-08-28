@@ -161,21 +161,54 @@ extract_tarball "$TARBALL" EXTRACTED
 install_binary "$EXTRACTED/alertmanager" "alertmanager"
 install_binary "$EXTRACTED/amtool"       "amtool"
 
-# --- 8. Configuration ------------------------------------------------------
 CONFIG="/etc/alertmanager/alertmanager.yml"
 TMP_CFG=$(mktemp)
 
-# alertmanager.yml.tpl contains stub {{TOKEN}} placeholders for optional channels.
-# We render with empty stubs for the commented-out tokens (they stay commented).
-# The real values come from environment.local.yml when the operator fills them in.
-render_template "$TEMPLATE_DIR/alertmanager.yml.tpl" "$TMP_CFG" \
-    "SMTP_SMARTHOST=$(get_env smtp_smarthost "smtp.example.com:587")" \
-    "SMTP_FROM=$(get_env smtp_from "alertmanager@example.com")" \
-    "SMTP_AUTH_USER=$(get_env smtp_auth_username "alertmanager@example.com")" \
-    "SMTP_AUTH_PASSWORD=$(get_env smtp_auth_password "changeme")" \
-    "ALERT_EMAIL_TO=$(get_env alert_email_to "admin@example.com")" \
-    "TELEGRAM_BOT_TOKEN=$(get_env telegram_bot_token "")" \
-    "TELEGRAM_CHAT_ID=$(get_env telegram_chat_id "0")"
+# Read optional Telegram credentials from environment.local.yml.
+TELEGRAM_TOKEN=$(get_env telegram_bot_token "" 2>/dev/null || true)
+TELEGRAM_CHAT=$(get_env telegram_chat_id   "" 2>/dev/null || true)
+
+if [[ -n "$TELEGRAM_TOKEN" && -n "$TELEGRAM_CHAT" ]]; then
+    # Full config with Telegram receiver.
+    log info "Telegram credentials found — rendering with Telegram receiver"
+    render_template "$TEMPLATE_DIR/alertmanager.yml.tpl" "$TMP_CFG" \
+        "SMTP_SMARTHOST=$(get_env smtp_smarthost   "smtp.example.com:587")" \
+        "SMTP_FROM=$(get_env smtp_from             "alertmanager@example.com")" \
+        "SMTP_AUTH_USER=$(get_env smtp_auth_username "alertmanager@example.com")" \
+        "SMTP_AUTH_PASSWORD=$(get_env smtp_auth_password "changeme")" \
+        "ALERT_EMAIL_TO=$(get_env alert_email_to   "admin@example.com")" \
+        "TELEGRAM_BOT_TOKEN=$TELEGRAM_TOKEN" \
+        "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT"
+else
+    # No Telegram token yet — render a minimal null-receiver config so alertmanager
+    # starts cleanly. Run '--reinstall' once credentials are added.
+    log warn "telegram_bot_token not set in environment.local.yml — installing with null receiver"
+    log warn "To enable Telegram alerts:"
+    log warn "  1. Add telegram_bot_token and telegram_chat_id to configs/environment.local.yml"
+    log warn "  2. Run: sudo ./monitorctl install alertmanager --reinstall"
+    cat > "$TMP_CFG" << 'NULLCFG'
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'instance']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'null'
+
+receivers:
+  - name: 'null'
+
+inhibit_rules:
+  - source_match:
+      alertname: InstanceDown
+    target_match_re:
+      alertname: .+
+    equal:
+      - instance
+NULLCFG
+fi
 
 if [[ ! -f "$CONFIG" ]]; then
     install -m 0640 -o root -g alertmanager "$TMP_CFG" "$CONFIG"
