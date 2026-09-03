@@ -37,6 +37,7 @@ setup_error_trap
 log info "=== monitoring uninstall starting ==="
 
 require_root
+require_supported_os
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     die "Usage: sudo ./scripts/uninstall.sh <component|all> [--purge] [--keep-config] [--yes]
@@ -240,21 +241,38 @@ uninstall_component() {
         fi
     done
 
-    # 4. APT removal (alloy, grafana, nginx)
+    # 4. Package manager removal (alloy, grafana, nginx)
     if [[ -n "$apt_pkg" ]]; then
-        if dpkg -l "$apt_pkg" 2>/dev/null | grep -q '^ii'; then
-            if [[ $PURGE -eq 1 ]]; then
-                apt-get purge -y "$apt_pkg" && log info "  apt purge: $apt_pkg" || true
-            else
-                apt-get remove -y "$apt_pkg" && log info "  apt remove: $apt_pkg" || true
+        if [[ "${OS_FAMILY:-debian}" == "rhel" ]]; then
+            if rpm -q "$apt_pkg" >/dev/null 2>&1; then
+                dnf remove -y "$apt_pkg" && log info "  dnf remove: $apt_pkg" || true
             fi
+            case "$apt_pkg" in
+                alloy|grafana)
+                    # Remove Grafana dnf repo if neither alloy nor grafana remains
+                    if ! rpm -q grafana >/dev/null 2>&1 && ! rpm -q alloy >/dev/null 2>&1; then
+                        rm -f /etc/yum.repos.d/grafana.repo
+                        log info "  removed /etc/yum.repos.d/grafana.repo"
+                    fi
+                    ;;
+            esac
+        else
+            if dpkg -l "$apt_pkg" 2>/dev/null | grep -q '^ii'; then
+                if [[ $PURGE -eq 1 ]]; then
+                    apt-get purge -y "$apt_pkg" && log info "  apt purge: $apt_pkg" || true
+                else
+                    apt-get remove -y "$apt_pkg" && log info "  apt remove: $apt_pkg" || true
+                fi
+            fi
+            case "$apt_pkg" in
+                alloy|grafana)
+                    if ! dpkg -l grafana 2>/dev/null | grep -q '^ii' && ! dpkg -l alloy 2>/dev/null | grep -q '^ii'; then
+                        rm -f /etc/apt/sources.list.d/grafana.list /etc/apt/keyrings/grafana.gpg
+                    fi
+                    ;;
+                nginx)   : ;;  # keep system nginx apt source
+            esac
         fi
-        # Remove apt repo files for alloy/grafana
-        case "$apt_pkg" in
-            alloy)   rm -f /etc/apt/sources.list.d/grafana.list ;;
-            grafana) rm -f /etc/apt/sources.list.d/grafana.list ;;
-            nginx)   : ;;  # keep system nginx apt source
-        esac
     fi
 
     # 5. Remove config directory (unless --keep-config)
@@ -306,6 +324,11 @@ readarray -t REVERSED < <(printf '%s\n' "${FINAL_TARGETS[@]}" | tac)
 for comp in "${REVERSED[@]}"; do
     uninstall_component "$comp"
 done
+
+if [[ $PURGE -eq 1 && ${#FINAL_TARGETS[@]} -eq ${#ALL_COMPONENTS[@]} ]]; then
+    rm -rf /var/log/monitoring "$DOWNLOAD_DIR"
+    log info "  purged /var/log/monitoring and download cache"
+fi
 
 log info "=== uninstall complete ==="
 [[ $PURGE -eq 0 ]] && log info "Data directories preserved. Run with --purge to remove them."
